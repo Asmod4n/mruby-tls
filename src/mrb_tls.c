@@ -367,7 +367,7 @@ static mrb_value
 mrb_tls_read(mrb_state *mrb, mrb_value self)
 {
   mrb_value str;
-  char buf[4096];
+  char buf[16384];
   size_t outlen;
 
   mrb_get_args(mrb, "S", &str);

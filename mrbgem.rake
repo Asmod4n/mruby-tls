@@ -1,4 +1,4 @@
-﻿MRuby::Gem::Specification.new('tls') do |spec|
+﻿MRuby::Gem::Specification.new('mruby-tls') do |spec|
   spec.license = 'Apache-2'
   spec.author  = 'Hendrik Beskow'
   spec.summary = 'mruby bindings to libtls'
