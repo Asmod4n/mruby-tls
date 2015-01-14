@@ -372,22 +372,27 @@ mrb_tls_read(mrb_state *mrb, mrb_value self)
   size_t outlen;
 
   i = mrb_get_args(mrb, "S|i", &str, &buf_len);
-  if (i == 1)
-    if (tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(str), RSTRING_LEN(str), &outlen) == -1)
+  if (i == 1) {
+    struct RString *s = mrb_str_ptr(str);
+    mrb_str_modify(mrb, s);
+    if (tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(str), RSTRING_CAPA(str), &outlen) == 0) {
+      RSTR_SET_LEN(s, outlen);
+      RSTR_PTR(s)[outlen] = '\0';   /* sentinel */
+    }
+    else
       goto Error;
+  } else {
+    if (buf_len > 0 && buf_len < MRB_INT_MAX) {
+      char buf[buf_len];
+      if (tls_read((tls_t *) DATA_PTR(self), buf, (size_t) buf_len, &outlen) == 0)
+        mrb_str_cat(mrb, str, buf, outlen);
 
-  else
-  if (buf_len > 0 && buf_len < MRB_INT_MAX)
-    char buf[buf_len];
-
-  else
-    mrb_raise(mrb, E_RANGE_ERROR, "buf_len is out of range");
-
-  if (tls_read((tls_t *) DATA_PTR(self), buf, (size_t) sizeof(buf), &outlen) == 0)
-    mrb_str_cat(mrb, str, buf, outlen);
-
-  else
-    goto Error;
+      else
+        goto Error;
+    }
+    else
+      mrb_raise(mrb, E_RANGE_ERROR, "buf_len is out of range");
+  }
 
   return mrb_fixnum_value(outlen);
 
