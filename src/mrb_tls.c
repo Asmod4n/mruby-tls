@@ -374,10 +374,9 @@ mrb_tls_read(mrb_state *mrb, mrb_value self)
   i = mrb_get_args(mrb, "S|i", &str, &buf_len);
   if (i == 1) {
     struct RString *s = mrb_str_ptr(str);
-    mrb_str_modify(mrb, s);
-    if (tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(str), RSTRING_CAPA(str), &outlen) == 0) {
+    if (tls_read((tls_t *) DATA_PTR(self), RSTR_PTR(s), RSTR_CAPA(s) - 1, &outlen) == 0) {
       RSTR_SET_LEN(s, outlen);
-      RSTR_PTR(s)[outlen] = '\0';   /* sentinel */
+      RSTR_PTR(s)[outlen] = '\0';
     }
     else
       goto Error;
@@ -410,7 +409,7 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "s", &buf, &buf_len);
 
   if (tls_write((tls_t *) DATA_PTR(self), buf, buf_len, &outlen) == 0)
-    return 
+    return mrb_fixnum_value(outlen);
 
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
