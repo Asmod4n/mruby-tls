@@ -372,8 +372,10 @@ mrb_tls_read(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "S", &str);
 
-  if (tls_read((tls_t *) DATA_PTR(self), buf, sizeof(buf), &outlen) == 0)
-    return mrb_str_cat(mrb, str, buf, outlen);
+  if (tls_read((tls_t *) DATA_PTR(self), buf, sizeof(buf), &outlen) == 0) {
+    mrb_str_cat(mrb, str, buf, outlen);
+    return mrb_fixnum_value(outlen);
+  }
 
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
@@ -406,7 +408,7 @@ mrb_tls_close(mrb_state *mrb, mrb_value self)
 }
 
 void
-mrb_tls_gem_init(mrb_state* mrb) {
+mrb_mruby_tls_gem_init(mrb_state* mrb) {
   struct RClass *tls_class;
   tls_class = mrb_define_module(mrb, "Tls");
   mrb_define_module_function(mrb, tls_class, "init", mrb_tls_init, MRB_ARGS_NONE());
@@ -456,6 +458,6 @@ mrb_tls_gem_init(mrb_state* mrb) {
 }
 
 void
-mrb_tls_gem_final(mrb_state* mrb) {
+mrb_mruby_tls_gem_final(mrb_state* mrb) {
   /* finalizer */
 }
