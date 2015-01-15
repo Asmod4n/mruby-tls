@@ -54,10 +54,13 @@ mrb_tls_config_new(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_ca_file(mrb_state *mrb, mrb_value self)
 {
-  char *ca_file;
+  char *ca_file_ptr;
   mrb_int ca_file_len;
 
-  mrb_get_args(mrb, "s", &ca_file, &ca_file_len);
+  mrb_get_args(mrb, "s", &ca_file_ptr, &ca_file_len);
+  char ca_file[ca_file_len] = {0};
+  memcpy(ca_file, ca_file_ptr, ca_file_len);
+  ca_file[ca_file_len] = '\0';
 
   if (tls_config_set_ca_file((tls_config_t *) DATA_PTR(self),
     ca_file) == 0)
@@ -72,10 +75,13 @@ mrb_tls_config_set_ca_file(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_ca_path(mrb_state *mrb, mrb_value self)
 {
-  char *ca_path;
+  char *ca_path_ptr;
   mrb_int ca_path_len;
 
-  mrb_get_args(mrb, "s", &ca_path, &ca_path_len);
+  mrb_get_args(mrb, "s", &ca_path_ptr, &ca_path_len);
+  char ca_path[ca_path_len] = {0};
+  memcpy(ca_path, ca_path_ptr, ca_path_len);
+  ca_path[ca_path_len] = '\0';
 
   if (tls_config_set_ca_path((tls_config_t *) DATA_PTR(self),
     ca_path) == 0)
@@ -90,10 +96,13 @@ mrb_tls_config_set_ca_path(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_cert_file(mrb_state *mrb, mrb_value self)
 {
-  char *cert_file;
+  char *cert_file_ptr;
   mrb_int cert_file_len;
 
-  mrb_get_args(mrb, "s", &cert_file, &cert_file_len);
+  mrb_get_args(mrb, "s", &cert_file_ptr, &cert_file_len);
+  char cert_file[cert_file_len] = {0};
+  memcpy(cert_file, cert_file_ptr, cert_file_len);
+  cert_file[cert_file_len] = '\0';
 
   if (tls_config_set_cert_file((tls_config_t *) DATA_PTR(self),
     cert_file) == 0)
@@ -126,10 +135,13 @@ mrb_tls_config_set_cert_mem(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_ciphers(mrb_state *mrb, mrb_value self)
 {
-  char *ciphers;
+  char *ciphers_ptr;
   mrb_int ciphers_len;
 
-  mrb_get_args(mrb, "s", &ciphers, &ciphers_len);
+  mrb_get_args(mrb, "s", &ciphers_ptr, &ciphers_len);
+  char ciphers[ciphers_len] = {0};
+  memcpy(ciphers, ciphers_ptr, ciphers_len);
+  ciphers[ciphers_len] = '\0';
 
   if (tls_config_set_ciphers((tls_config_t *) DATA_PTR(self),
     ciphers) == 0)
@@ -144,10 +156,13 @@ mrb_tls_config_set_ciphers(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_ecdhcurve(mrb_state *mrb, mrb_value self)
 {
-  char *ecdhcurve;
+  char *ecdhcurve_ptr;
   mrb_int ecdhcurve_len;
 
-  mrb_get_args(mrb, "s", &ecdhcurve, &ecdhcurve_len);
+  mrb_get_args(mrb, "s", &ecdhcurve_ptr, &ecdhcurve_len);
+  char ecdhcurve[ecdhcurve_len] = {0};
+  memcpy(ecdhcurve, ecdhcurve_ptr, ecdhcurve_len);
+  ecdhcurve[ecdhcurve_len] = '\0';
 
   if (tls_config_set_ecdhcurve((tls_config_t *) DATA_PTR(self),
     ecdhcurve) == 0)
@@ -162,10 +177,13 @@ mrb_tls_config_set_ecdhcurve(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_config_set_key_file(mrb_state *mrb, mrb_value self)
 {
-  char *key_file;
+  char *key_file_ptr;
   mrb_int key_file_len;
 
-  mrb_get_args(mrb, "s", &key_file, &key_file_len);
+  mrb_get_args(mrb, "s", &key_file_ptr, &key_file_len);
+  char key_file[key_file_len] = {0};
+  memcpy(key_file, key_file_ptr, key_file_len);
+  key_file[key_file_len] = '\0';
 
   if (tls_config_set_key_file((tls_config_t *) DATA_PTR(self),
     key_file) == 0)
@@ -316,12 +334,19 @@ mrb_tls_reset(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_connect(mrb_state *mrb, mrb_value self)
 {
-  char *host;
+  char *host_ptr;
   mrb_int host_len;
-  char *port;
+  char *port_ptr;
   mrb_int port_len;
 
-  mrb_get_args(mrb, "ss", &host, &host_len, &port, &port_len);
+  mrb_get_args(mrb, "ss", &host_ptr, &host_len, &port_ptr, &port_len);
+  char host[host_len] = {0};
+  memcpy(host, host_ptr, host_len) ;
+  host[host_len] = '\0';
+  char port[port_len] = {0};
+  memcpy(port, port_ptr, port_len) ;
+  port[port_len] = '\0';
+
   if (tls_connect((tls_t *) DATA_PTR(self), host, port) == 0)
       return self;
 
@@ -333,10 +358,13 @@ static mrb_value
 mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
 {
   mrb_int fd_read, fd_write;
-  char *hostname;
+  char *hostname_ptr;
   mrb_int hostname_len;
 
-  mrb_get_args(mrb, "iis", &fd_read, &fd_write, &hostname, &hostname_len);
+  mrb_get_args(mrb, "iis", &fd_read, &fd_write, &hostname_ptr, &hostname_len);
+  char hostname[hostname_len] = {0};
+  memcpy(hostname, hostname_ptr, hostname_len);
+  hostname[hostname_len] = '\0';
 
   if (tls_connect_fds((tls_t *) DATA_PTR(self),
     fd_read, fd_write, hostname) == 0)
@@ -350,10 +378,14 @@ static mrb_value
 mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
 {
   mrb_int socket;
-  char *hostname;
+  char *hostname_ptr;
   mrb_int hostname_len;
 
-  mrb_get_args(mrb, "is", &socket, &hostname, &hostname_len);
+  mrb_get_args(mrb, "is", &socket, &hostname_ptr, &hostname_len);
+
+  char hostname[hostname_len] = {0};
+  memcpy(hostname, hostname_ptr, hostname_len);
+  hostname[hostname_len] = '\0';
 
   if (tls_connect_socket((tls_t *) DATA_PTR(self),
     socket, hostname) == 0)
