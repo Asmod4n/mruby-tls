@@ -2,6 +2,7 @@
 #define MRB_TLS_H
 
 #include <stdlib.h>
+#include <string.h>
 #include <tls.h>
 #include <mruby/data.h>
 #include <mruby/string.h>
