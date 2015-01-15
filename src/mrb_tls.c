@@ -366,16 +366,16 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_read(mrb_state *mrb, mrb_value self)
 {
-  mrb_value str;
-  char buf[16384];
+  mrb_int buf_len = 16384;
   size_t outlen;
 
-  mrb_get_args(mrb, "S", &str);
+  if (mrb_get_args(mrb, "|i", &buf_len) == 1)
+    if (buf_len <= 0 || buf_len >= MRB_INT_MAX)
+      mrb_raise(mrb, E_RANGE_ERROR, "buf_len is out of range");
 
-  if (tls_read((tls_t *) DATA_PTR(self), buf, sizeof(buf), &outlen) == 0) {
-    mrb_str_cat(mrb, str, buf, outlen);
-    return mrb_fixnum_value(outlen);
-  }
+  char buf[buf_len];
+  if (tls_read((tls_t *) DATA_PTR(self), buf, sizeof(buf), &outlen) == 0)
+    return mrb_str_new(mrb, buf, outlen);
 
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
@@ -387,14 +387,18 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
   char *buf;
   mrb_int buf_len;
   size_t outlen;
+  size_t written = 0;
 
   mrb_get_args(mrb, "s", &buf, &buf_len);
 
-  if (tls_write((tls_t *) DATA_PTR(self), buf, buf_len, &outlen) == 0)
-    return mrb_fixnum_value(outlen);
+  do {
+    if (tls_write((tls_t *) DATA_PTR(self), buf, buf_len, &outlen) == 0)
+      written += outlen;
+    else
+      mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
+  } while(written != buf_len);
 
-  else
-    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
+  return self;
 }
 
 static mrb_value
@@ -441,7 +445,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   mrb_define_method(mrb, tls_client_class, "connect",         mrb_tls_connect,        MRB_ARGS_REQ(2));
   mrb_define_method(mrb, tls_client_class, "connect_fds",     mrb_tls_connect_fds,    MRB_ARGS_REQ(3));
   mrb_define_method(mrb, tls_client_class, "connect_socket",  mrb_tls_connect_socket, MRB_ARGS_REQ(2));
-  mrb_define_method(mrb, tls_client_class, "read",            mrb_tls_read,           MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_client_class, "read",            mrb_tls_read,           MRB_ARGS_OPT(1));
   mrb_define_method(mrb, tls_client_class, "write",           mrb_tls_write,          MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_client_class, "close",           mrb_tls_close,          MRB_ARGS_NONE());
 
