@@ -424,7 +424,7 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "s", &buf, &buf_len);
 
   do {
-    if (tls_write((tls_t *) DATA_PTR(self), buf, buf_len, &outlen) == 0)
+    if (tls_write((tls_t *) DATA_PTR(self), buf + written, buf_len - written, &outlen) == 0)
       written += outlen;
     else
       mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
