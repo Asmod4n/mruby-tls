@@ -58,7 +58,7 @@ mrb_tls_config_set_ca_file(mrb_state *mrb, mrb_value self)
   mrb_int ca_file_len;
 
   mrb_get_args(mrb, "s", &ca_file_ptr, &ca_file_len);
-  char ca_file[ca_file_len] = {0};
+  char ca_file[ca_file_len];
   memcpy(ca_file, ca_file_ptr, ca_file_len);
   ca_file[ca_file_len] = '\0';
 
@@ -79,7 +79,7 @@ mrb_tls_config_set_ca_path(mrb_state *mrb, mrb_value self)
   mrb_int ca_path_len;
 
   mrb_get_args(mrb, "s", &ca_path_ptr, &ca_path_len);
-  char ca_path[ca_path_len] = {0};
+  char ca_path[ca_path_len];
   memcpy(ca_path, ca_path_ptr, ca_path_len);
   ca_path[ca_path_len] = '\0';
 
@@ -100,7 +100,7 @@ mrb_tls_config_set_cert_file(mrb_state *mrb, mrb_value self)
   mrb_int cert_file_len;
 
   mrb_get_args(mrb, "s", &cert_file_ptr, &cert_file_len);
-  char cert_file[cert_file_len] = {0};
+  char cert_file[cert_file_len];
   memcpy(cert_file, cert_file_ptr, cert_file_len);
   cert_file[cert_file_len] = '\0';
 
@@ -139,7 +139,7 @@ mrb_tls_config_set_ciphers(mrb_state *mrb, mrb_value self)
   mrb_int ciphers_len;
 
   mrb_get_args(mrb, "s", &ciphers_ptr, &ciphers_len);
-  char ciphers[ciphers_len] = {0};
+  char ciphers[ciphers_len];
   memcpy(ciphers, ciphers_ptr, ciphers_len);
   ciphers[ciphers_len] = '\0';
 
@@ -160,7 +160,7 @@ mrb_tls_config_set_ecdhcurve(mrb_state *mrb, mrb_value self)
   mrb_int ecdhcurve_len;
 
   mrb_get_args(mrb, "s", &ecdhcurve_ptr, &ecdhcurve_len);
-  char ecdhcurve[ecdhcurve_len] = {0};
+  char ecdhcurve[ecdhcurve_len];
   memcpy(ecdhcurve, ecdhcurve_ptr, ecdhcurve_len);
   ecdhcurve[ecdhcurve_len] = '\0';
 
@@ -181,7 +181,7 @@ mrb_tls_config_set_key_file(mrb_state *mrb, mrb_value self)
   mrb_int key_file_len;
 
   mrb_get_args(mrb, "s", &key_file_ptr, &key_file_len);
-  char key_file[key_file_len] = {0};
+  char key_file[key_file_len];
   memcpy(key_file, key_file_ptr, key_file_len);
   key_file[key_file_len] = '\0';
 
@@ -340,10 +340,10 @@ mrb_tls_connect(mrb_state *mrb, mrb_value self)
   mrb_int port_len;
 
   mrb_get_args(mrb, "ss", &host_ptr, &host_len, &port_ptr, &port_len);
-  char host[host_len] = {0};
+  char host[host_len];
   memcpy(host, host_ptr, host_len) ;
   host[host_len] = '\0';
-  char port[port_len] = {0};
+  char port[port_len];
   memcpy(port, port_ptr, port_len) ;
   port[port_len] = '\0';
 
@@ -362,7 +362,7 @@ mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
   mrb_int hostname_len;
 
   mrb_get_args(mrb, "iis", &fd_read, &fd_write, &hostname_ptr, &hostname_len);
-  char hostname[hostname_len] = {0};
+  char hostname[hostname_len];
   memcpy(hostname, hostname_ptr, hostname_len);
   hostname[hostname_len] = '\0';
 
@@ -383,7 +383,7 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "is", &socket, &hostname_ptr, &hostname_len);
 
-  char hostname[hostname_len] = {0};
+  char hostname[hostname_len];
   memcpy(hostname, hostname_ptr, hostname_len);
   hostname[hostname_len] = '\0';
 
