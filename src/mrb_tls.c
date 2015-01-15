@@ -366,37 +366,19 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_read(mrb_state *mrb, mrb_value self)
 {
-  mrb_int i;
   mrb_value str;
-  mrb_int buf_len;
+  char buf[16384];
   size_t outlen;
 
-  i = mrb_get_args(mrb, "S|i", &str, &buf_len);
-  if (i == 1) {
-    struct RString *s = mrb_str_ptr(str);
-    if (tls_read((tls_t *) DATA_PTR(self), RSTR_PTR(s), RSTR_CAPA(s) - 1, &outlen) == 0) {
-      RSTR_SET_LEN(s, outlen);
-      RSTR_PTR(s)[outlen] = '\0';
-    }
-    else
-      goto Error;
-  } else {
-    if (buf_len > 0 && buf_len < MRB_INT_MAX) {
-      char buf[buf_len];
-      if (tls_read((tls_t *) DATA_PTR(self), buf, (size_t) buf_len, &outlen) == 0)
-        mrb_str_cat(mrb, str, buf, outlen);
+  mrb_get_args(mrb, "S", &str);
 
-      else
-        goto Error;
-    }
-    else
-      mrb_raise(mrb, E_RANGE_ERROR, "buf_len is out of range");
+  if (tls_read((tls_t *) DATA_PTR(self), buf, sizeof(buf), &outlen) == 0) {
+    mrb_str_cat(mrb, str, buf, outlen);
+    return mrb_fixnum_value(outlen);
   }
 
-  return mrb_fixnum_value(outlen);
-
-Error:
-  mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
+  else
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
 }
 
 static mrb_value
@@ -459,7 +441,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   mrb_define_method(mrb, tls_client_class, "connect",         mrb_tls_connect,        MRB_ARGS_REQ(2));
   mrb_define_method(mrb, tls_client_class, "connect_fds",     mrb_tls_connect_fds,    MRB_ARGS_REQ(3));
   mrb_define_method(mrb, tls_client_class, "connect_socket",  mrb_tls_connect_socket, MRB_ARGS_REQ(2));
-  mrb_define_method(mrb, tls_client_class, "read",            mrb_tls_read,           MRB_ARGS_ARG(1, 1));
+  mrb_define_method(mrb, tls_client_class, "read",            mrb_tls_read,           MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_client_class, "write",           mrb_tls_write,          MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_client_class, "close",           mrb_tls_close,          MRB_ARGS_NONE());
 
