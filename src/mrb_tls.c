@@ -418,8 +418,7 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 {
   char *buf;
   mrb_int buf_len;
-  size_t outlen;
-  size_t written = 0;
+  size_t written = 0, outlen;
 
   mrb_get_args(mrb, "s", &buf, &buf_len);
 
