@@ -1,5 +1,9 @@
 # mruby-tls
 
+Prerequisites
+=============
+libtls needs to be somewhere your compiler can find it
+
 Example
 =======
 ```ruby
