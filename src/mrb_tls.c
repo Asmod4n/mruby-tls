@@ -23,19 +23,19 @@ mrb_tls_config_new(mrb_state *mrb, mrb_value self)
 {
   tls_config_t *config;
 
-  config = (tls_config_t *) DATA_PTR(self);
-  if (config)
-    mrb_free(mrb, config);
-
-  mrb_data_init(self, NULL, &tls_config_type);
+  errno = 0;
   config = tls_config_new();
-  if (config) {
+  if (config)
     mrb_data_init(self, config, &tls_config_type);
-    return self;
-  } else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
+
+  return self;
 }
 
 static mrb_value
@@ -44,14 +44,18 @@ mrb_tls_config_set_ca_file(mrb_state *mrb, mrb_value self)
   char *ca_file;
 
   mrb_get_args(mrb, "z", &ca_file);
-  if (tls_config_set_ca_file((tls_config_t *) DATA_PTR(self),
-    ca_file) == 0)
-    return self;
 
-  else {
+  errno = 0;
+
+  if (tls_config_set_ca_file((tls_config_t *) DATA_PTR(self), ca_file) == 0)
+    return self;
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -61,14 +65,17 @@ mrb_tls_config_set_ca_path(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z", &ca_path);
 
-  if (tls_config_set_ca_path((tls_config_t *) DATA_PTR(self),
-    ca_path) == 0)
-    return self;
+  errno = 0;
 
-  else {
+  if (tls_config_set_ca_path((tls_config_t *) DATA_PTR(self), ca_path) == 0)
+    return self;
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -78,14 +85,17 @@ mrb_tls_config_set_cert_file(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z", &cert_file);
 
-  if (tls_config_set_cert_file((tls_config_t *) DATA_PTR(self),
-    cert_file) == 0)
-    return self;
+  errno = 0;
 
-  else {
+  if (tls_config_set_cert_file((tls_config_t *) DATA_PTR(self), cert_file) == 0)
+    return self;
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -96,14 +106,19 @@ mrb_tls_config_set_cert_mem(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "s", &cert, &cert_len);
 
+  errno = 0;
+
   if (tls_config_set_cert_mem((tls_config_t *) DATA_PTR(self),
     (uint8_t *) cert, (size_t) cert_len) == 0)
     return self;
 
-  else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -113,14 +128,17 @@ mrb_tls_config_set_ciphers(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z", &ciphers);
 
-  if (tls_config_set_ciphers((tls_config_t *) DATA_PTR(self),
-    ciphers) == 0)
-    return self;
+  errno = 0;
 
-  else {
+  if (tls_config_set_ciphers((tls_config_t *) DATA_PTR(self), ciphers) == 0)
+    return self;
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -130,14 +148,19 @@ mrb_tls_config_set_ecdhecurve(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z", &ecdhecurve);
 
+  errno = 0;
+
   if (tls_config_set_ecdhecurve((tls_config_t *) DATA_PTR(self),
     ecdhecurve) == 0)
     return self;
 
-  else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -147,14 +170,17 @@ mrb_tls_config_set_key_file(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z", &key_file);
 
-  if (tls_config_set_key_file((tls_config_t *) DATA_PTR(self),
-    key_file) == 0)
-    return self;
+  errno = 0;
 
-  else {
+  if (tls_config_set_key_file((tls_config_t *) DATA_PTR(self), key_file) == 0)
+    return self;
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -165,14 +191,19 @@ mrb_tls_config_set_key_mem(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "s", &key, &key_len);
 
+  errno = 0;
+
   if (tls_config_set_key_mem((tls_config_t *) DATA_PTR(self),
     (uint8_t *) key, (size_t) key_len) == 0)
     return self;
 
-  else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static mrb_value
@@ -187,6 +218,7 @@ mrb_tls_config_set_protocols(mrb_state *mrb, mrb_value self)
 
   tls_config_set_protocols((tls_config_t *) DATA_PTR(self),
     (uint32_t) protocols);
+
   return self;
 }
 
@@ -202,6 +234,7 @@ mrb_tls_config_set_verify_depth(mrb_state *mrb, mrb_value self)
 
   tls_config_set_verify_depth((tls_config_t *) DATA_PTR(self),
     (int) verify_depth);
+
   return self;
 }
 
@@ -210,6 +243,31 @@ mrb_tls_config_clear_keys(mrb_state *mrb, mrb_value self)
 {
   tls_config_clear_keys((tls_config_t *) DATA_PTR(self));
   return self;
+}
+
+static mrb_value
+mrb_tls_load_file(mrb_state *mrb, mrb_value self)
+{
+  char *file, *password = NULL;
+
+  mrb_get_args(mrb, "z|z", &file, &password);
+
+  size_t len;
+  uint8_t *cert;
+
+  errno = 0;
+  cert = tls_load_file((const char *) file, &len, password);
+  if (cert) {
+    return mrb_str_new(mrb, (const char *) cert, len);
+    free(cert);
+  }
+  else
+  if (errno == ENOMEM) {
+    mrb->out_of_memory = TRUE;
+    mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
+  }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
 }
 
 static void
@@ -228,27 +286,24 @@ mrb_tls_client(mrb_state *mrb, mrb_value self)
   tls_t *ctx;
   mrb_value config_obj;
 
-  ctx = (tls_t *) DATA_PTR(self);
-  if (ctx)
-    mrb_free(mrb, ctx);
-
-  mrb_data_init(self, NULL, &tls_type);
+  errno = 0;
   ctx = tls_client();
   if (ctx) {
     mrb_data_init(self, ctx, &tls_type);
 
     if (mrb_get_args(mrb, "|o", &config_obj) == 1 &&
-      mrb_conf_tls(mrb, ctx, config_obj) == -1) {
-      mrb->out_of_memory = TRUE;
-      mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
-    }
-
-    return self;
+      mrb_conf_tls(mrb, ctx, config_obj) == -1)
+      mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
   }
-  else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
+
+  return self;
 }
 
 static mrb_value
@@ -257,25 +312,24 @@ mrb_tls_server(mrb_state *mrb, mrb_value self)
   tls_t *ctx;
   mrb_value config_obj;
 
-  ctx = (tls_t *) DATA_PTR(self);
-  if (ctx)
-    mrb_free(mrb, ctx);
-
-  mrb_data_init(self, NULL, &tls_type);
+  errno = 0;
   ctx = tls_server();
   if (ctx) {
     mrb_data_init(self, ctx, &tls_type);
 
     if (mrb_get_args(mrb, "|o", &config_obj) == 1 &&
       mrb_conf_tls(mrb, ctx, config_obj) == -1)
-      mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
-
-    return self;
+      mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
   }
-  else {
+  else
+  if (errno == ENOMEM) {
     mrb->out_of_memory = TRUE;
     mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
   }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
+
+  return self;
 }
 
 static mrb_value
@@ -284,9 +338,9 @@ mrb_tls_configure(mrb_state *mrb, mrb_value self)
   mrb_value config_obj;
 
   mrb_get_args(mrb, "o", &config_obj);
+
   if (mrb_conf_tls(mrb, (tls_t *) DATA_PTR(self), config_obj) == 0)
     return self;
-
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
 }
@@ -312,25 +366,31 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
     mrb_class_get_under(mrb, mrb_module_get(mrb, "Tls"), "Server")));
   tls_t *cctx = NULL;
 
-  if (tls_accept_socket((tls_t *) DATA_PTR(self), &cctx, (int) socket) == 0) {
+  if (tls_accept_socket((tls_t *) DATA_PTR(self), &cctx, (int) socket) == 0)
     mrb_data_init(cctx_val, cctx, &tls_type);
-
-    return cctx_val;
-  }
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
+
+  return cctx_val;
 }
 
 static mrb_value
 mrb_tls_connect(mrb_state *mrb, mrb_value self)
 {
-  char *host, *port;
+  char *host, *port = NULL;
 
-  mrb_get_args(mrb, "zz", &host, &port);
+  mrb_get_args(mrb, "z|z", &host, &port);
 
-  if (tls_connect((tls_t *) DATA_PTR(self), host, port) == 0)
-      return self;
+  int rc;
 
+  connect:
+  rc = tls_connect((tls_t *) DATA_PTR(self), host, port);
+
+  if (rc == 0)
+    return self;
+  else
+  if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
+    goto connect;
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
 }
@@ -385,11 +445,16 @@ mrb_tls_read(mrb_state *mrb, mrb_value self)
 
   mrb_value buf = mrb_str_buf_new(mrb, buf_len);
   size_t outlen;
+  int rc;
 
-  if (tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(buf),
-    RSTRING_CAPA(buf), &outlen) == 0)
+  read:
+  rc = tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf), &outlen);
+
+  if (rc == 0)
     return mrb_str_resize(mrb, buf, (mrb_int) outlen);
-
+  else
+  if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
+    goto read;
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
 }
@@ -399,16 +464,22 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 {
   char *buf;
   mrb_int buf_len;
-  size_t written = 0, outlen;
 
   mrb_get_args(mrb, "s", &buf, &buf_len);
 
+  size_t outlen;
+  int rc;
+
   do {
-    if (tls_write((tls_t *) DATA_PTR(self), buf + written, (size_t) buf_len - written, &outlen) == 0)
-      written += outlen;
+    rc = tls_write((tls_t *) DATA_PTR(self), buf, (size_t) buf_len, &outlen);
+    if (rc == 0)
+      break;
+    else
+    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
+      continue;
     else
       mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
-  } while(written != buf_len);
+  } while(1);
 
   return self;
 }
@@ -416,9 +487,16 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_close(mrb_state *mrb, mrb_value self)
 {
-  if (tls_close((tls_t *) DATA_PTR(self)) == 0)
-    return self;
+  int rc;
 
+  close:
+  rc = tls_close((tls_t *) DATA_PTR(self));
+
+  if (rc == 0)
+    return self;
+  else
+  if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
+    goto close;
   else
     mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
 }
@@ -429,6 +507,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
 
   tls_mod = mrb_define_module(mrb, "Tls");
   mrb_define_class_under(mrb, tls_mod, "Error", E_RUNTIME_ERROR);
+  mrb_define_module_function(mrb, tls_mod, "load_file", mrb_tls_load_file, MRB_ARGS_ARG(1, 2));
 
   tls_proto_mod = mrb_define_module_under(mrb, tls_mod, "Protocol");
   mrb_define_const(mrb, tls_proto_mod, "TLSv1_0", mrb_fixnum_value(TLS_PROTOCOL_TLSv1_0));
@@ -440,25 +519,25 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
 
   tls_conf_c = mrb_define_class_under(mrb, tls_mod, "Config", mrb->object_class);
   MRB_SET_INSTANCE_TT(tls_conf_c, MRB_TT_DATA);
-  mrb_define_method(mrb, tls_conf_c, "initialize",        mrb_tls_config_new,               MRB_ARGS_NONE());
-  mrb_define_method(mrb, tls_conf_c, "set_ca_file",       mrb_tls_config_set_ca_file,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_ca_path",       mrb_tls_config_set_ca_path,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_cert_file",     mrb_tls_config_set_cert_file,     MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_cert_mem",      mrb_tls_config_set_cert_mem,      MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_ciphers",       mrb_tls_config_set_ciphers,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_ecdhecurve",    mrb_tls_config_set_ecdhecurve,    MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_key_file",      mrb_tls_config_set_key_file,      MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_key_mem",       mrb_tls_config_set_key_mem,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_protocols",     mrb_tls_config_set_protocols,     MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "set_verify_depth",  mrb_tls_config_set_verify_depth,  MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "clear_keys",        mrb_tls_config_clear_keys,        MRB_ARGS_NONE());
+  mrb_define_method(mrb, tls_conf_c, "initialize",    mrb_tls_config_new,               MRB_ARGS_NONE());
+  mrb_define_method(mrb, tls_conf_c, "ca_file=",      mrb_tls_config_set_ca_file,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ca_path=",      mrb_tls_config_set_ca_path,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "cert_file=",    mrb_tls_config_set_cert_file,     MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "cert_mem=",     mrb_tls_config_set_cert_mem,      MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ciphers=",      mrb_tls_config_set_ciphers,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ecdhecurve=",   mrb_tls_config_set_ecdhecurve,    MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "key_file=",     mrb_tls_config_set_key_file,      MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "key_mem=",      mrb_tls_config_set_key_mem,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "protocols=",    mrb_tls_config_set_protocols,     MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "verify_depth=", mrb_tls_config_set_verify_depth,  MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "clear_keys",    mrb_tls_config_clear_keys,        MRB_ARGS_NONE());
 
   tls_cli_c = mrb_define_class_under(mrb, tls_mod, "Client", mrb->object_class);
   MRB_SET_INSTANCE_TT(tls_cli_c, MRB_TT_DATA);
   mrb_define_method(mrb, tls_cli_c, "initialize",      mrb_tls_client,         MRB_ARGS_OPT(1));
   mrb_define_method(mrb, tls_cli_c, "configure",       mrb_tls_configure,      MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_cli_c, "reset",           mrb_tls_reset,          MRB_ARGS_NONE());
-  mrb_define_method(mrb, tls_cli_c, "connect",         mrb_tls_connect,        MRB_ARGS_REQ(2));
+  mrb_define_method(mrb, tls_cli_c, "connect",         mrb_tls_connect,        MRB_ARGS_ARG(1, 1));
   mrb_define_method(mrb, tls_cli_c, "connect_fds",     mrb_tls_connect_fds,    MRB_ARGS_REQ(3));
   mrb_define_method(mrb, tls_cli_c, "connect_socket",  mrb_tls_connect_socket, MRB_ARGS_REQ(2));
   mrb_define_method(mrb, tls_cli_c, "read",            mrb_tls_read,           MRB_ARGS_OPT(1));
@@ -475,9 +554,15 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   mrb_define_method(mrb, tls_server_c, "write",         mrb_tls_write,          MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_server_c, "close",         mrb_tls_close,          MRB_ARGS_NONE());
 
+  errno = 0;
+
   if (tls_init() == -1) {
-    mrb->out_of_memory = TRUE;
-    mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
+    if (errno == ENOMEM) {
+      mrb->out_of_memory = TRUE;
+      mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
+    }
+    else
+      mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
   }
 }
 

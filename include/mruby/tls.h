@@ -1,7 +1,7 @@
 ﻿#ifndef MRUBY_TLS_H
 #define MRUBY_TLS_H
 
-#include "mruby.h"
+#include <mruby.h>
 
 #ifdef __cplusplus
 extern "C" {

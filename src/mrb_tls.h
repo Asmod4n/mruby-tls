@@ -1,6 +1,7 @@
 ﻿#ifndef MRB_TLS_H
 #define MRB_TLS_H
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tls.h>
