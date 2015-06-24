@@ -214,7 +214,7 @@ mrb_tls_config_set_protocols(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "i", &protocols);
 
   if (protocols < 0||protocols > UINT32_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "protocols it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "protocols is out of range");
 
   tls_config_set_protocols((tls_config_t *) DATA_PTR(self),
     (uint32_t) protocols);
@@ -230,7 +230,7 @@ mrb_tls_config_set_verify_depth(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "i", &verify_depth);
 
   if (verify_depth < INT_MIN||verify_depth > INT_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "verify_depth it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "verify_depth is out of range");
 
   tls_config_set_verify_depth((tls_config_t *) DATA_PTR(self),
     (int) verify_depth);
@@ -360,7 +360,7 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "i", &socket);
 
   if (socket < INT_MIN||socket > INT_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "socket it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "socket is out of range");
 
   mrb_value cctx_val = mrb_obj_value(mrb_obj_alloc(mrb, MRB_TT_DATA,
     mrb_class_get_under(mrb, mrb_module_get(mrb, "Tls"), "Server")));
@@ -404,10 +404,10 @@ mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "iiz", &fd_read, &fd_write, &hostname);
 
   if (fd_read < INT_MIN||fd_read > INT_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "fd_read it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "fd_read is out of range");
 
   if (fd_write < INT_MIN||fd_write > INT_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "fd_write it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "fd_write is out of range");
 
   if (tls_connect_fds((tls_t *) DATA_PTR(self),
     (int) fd_read, (int) fd_write, hostname) == 0)
@@ -426,7 +426,7 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
   mrb_get_args(mrb, "iz", &socket, &hostname);
 
   if (socket < INT_MIN||socket > INT_MAX)
-    mrb_raise(mrb, E_RANGE_ERROR, "socket it out of range");
+    mrb_raise(mrb, E_RANGE_ERROR, "socket is out of range");
 
   if (tls_connect_socket((tls_t *) DATA_PTR(self),
     (int) socket, hostname) == 0)
