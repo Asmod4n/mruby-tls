@@ -291,9 +291,13 @@ mrb_tls_client(mrb_state *mrb, mrb_value self)
   if (ctx) {
     mrb_data_init(self, ctx, &tls_type);
 
-    if (mrb_get_args(mrb, "|o", &config_obj) == 1 &&
-      mrb_conf_tls(mrb, ctx, config_obj) == -1)
-      mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    if (mrb_get_args(mrb, "|o", &config_obj) == 0) {
+      if (tls_configure(ctx, NULL) == -1)
+        mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    } else {
+      if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
+        mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    }
   }
   else
   if (errno == ENOMEM) {
@@ -317,9 +321,13 @@ mrb_tls_server(mrb_state *mrb, mrb_value self)
   if (ctx) {
     mrb_data_init(self, ctx, &tls_type);
 
-    if (mrb_get_args(mrb, "|o", &config_obj) == 1 &&
-      mrb_conf_tls(mrb, ctx, config_obj) == -1)
-      mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    if (mrb_get_args(mrb, "|o", &config_obj) == 0) {
+      if (tls_configure(ctx, NULL) == -1)
+        mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    } else {
+      if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
+        mrb_raise(mrb, E_TLS_ERROR, tls_error(ctx));
+    }
   }
   else
   if (errno == ENOMEM) {
