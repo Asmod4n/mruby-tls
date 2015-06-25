@@ -258,8 +258,9 @@ mrb_tls_load_file(mrb_state *mrb, mrb_value self)
   errno = 0;
   cert = tls_load_file((const char *) file, &len, password);
   if (cert) {
-    return mrb_str_new(mrb, (const char *) cert, len);
+    mrb_value cert_o = mrb_str_new(mrb, (const char *) cert, len);
     free(cert);
+    return cert_o;
   }
   else
   if (errno == ENOMEM) {
