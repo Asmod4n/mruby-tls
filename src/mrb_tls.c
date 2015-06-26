@@ -39,6 +39,27 @@ mrb_tls_config_new(mrb_state *mrb, mrb_value self)
 }
 
 static mrb_value
+mrb_tls_config_parse_protocols(mrb_state *mrb, mrb_value self)
+{
+  char *protostr;
+
+  mrb_get_args(mrb, "z", &protostr);
+
+  uint32_t protocols;
+
+  int rc = tls_config_parse_protocols(&protocols, protostr);
+
+  if (rc == 0) {
+    if (protocols > MRB_INT_MAX)
+      return mrb_float_value(mrb, protocols);
+    else
+      return mrb_fixnum_value(protocols);
+  }
+  else
+    mrb_raise(mrb, E_TLS_ERROR, strerror(errno));
+}
+
+static mrb_value
 mrb_tls_config_set_ca_file(mrb_state *mrb, mrb_value self)
 {
   char *ca_file;
@@ -231,6 +252,7 @@ mrb_tls_config_set_verify_depth(mrb_state *mrb, mrb_value self)
 
   if (verify_depth < INT_MIN||verify_depth > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "verify_depth is out of range");
+
 
   tls_config_set_verify_depth((tls_config_t *) DATA_PTR(self),
     (int) verify_depth);
@@ -526,18 +548,19 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
 
   tls_conf_c = mrb_define_class_under(mrb, tls_mod, "Config", mrb->object_class);
   MRB_SET_INSTANCE_TT(tls_conf_c, MRB_TT_DATA);
-  mrb_define_method(mrb, tls_conf_c, "initialize",    mrb_tls_config_new,               MRB_ARGS_NONE());
-  mrb_define_method(mrb, tls_conf_c, "ca_file=",      mrb_tls_config_set_ca_file,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "ca_path=",      mrb_tls_config_set_ca_path,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "cert_file=",    mrb_tls_config_set_cert_file,     MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "cert_mem=",     mrb_tls_config_set_cert_mem,      MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "ciphers=",      mrb_tls_config_set_ciphers,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "ecdhecurve=",   mrb_tls_config_set_ecdhecurve,    MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "key_file=",     mrb_tls_config_set_key_file,      MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "key_mem=",      mrb_tls_config_set_key_mem,       MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "protocols=",    mrb_tls_config_set_protocols,     MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "verify_depth=", mrb_tls_config_set_verify_depth,  MRB_ARGS_REQ(1));
-  mrb_define_method(mrb, tls_conf_c, "clear_keys",    mrb_tls_config_clear_keys,        MRB_ARGS_NONE());
+  mrb_define_method(mrb, tls_conf_c, "initialize",      mrb_tls_config_new,               MRB_ARGS_NONE());
+  mrb_define_method(mrb, tls_conf_c, "parse_protocols", mrb_tls_config_parse_protocols,   MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ca_file=",        mrb_tls_config_set_ca_file,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ca_path=",        mrb_tls_config_set_ca_path,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "cert_file=",      mrb_tls_config_set_cert_file,     MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "cert_mem=",       mrb_tls_config_set_cert_mem,      MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ciphers=",        mrb_tls_config_set_ciphers,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "ecdhecurve=",     mrb_tls_config_set_ecdhecurve,    MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "key_file=",       mrb_tls_config_set_key_file,      MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "key_mem=",        mrb_tls_config_set_key_mem,       MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "protocols=",      mrb_tls_config_set_protocols,     MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "verify_depth=",   mrb_tls_config_set_verify_depth,  MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_conf_c, "clear_keys",      mrb_tls_config_clear_keys,        MRB_ARGS_NONE());
 
   tls_cli_c = mrb_define_class_under(mrb, tls_mod, "Client", mrb->object_class);
   MRB_SET_INSTANCE_TT(tls_cli_c, MRB_TT_DATA);
