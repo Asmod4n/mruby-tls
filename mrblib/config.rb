@@ -7,7 +7,7 @@ module Tls
         when :ca_file
           instance.ca_file = v
         when :ca_path
-          instance.ca_file = v
+          instance.ca_path = v
         when :cert_file
           instance.cert_file = v
         when :cert_mem
@@ -21,7 +21,11 @@ module Tls
         when :key_mem
           instance.key_mem = v
         when :protocols
-          instance.protocols = instance.parse_protocols(v)
+          if v.is_a?(Numeric)
+            instance.protocols = v
+          else
+            instance.protocols = instance.parse_protocols(v)
+          end
         when :verify_depth
           instance.verify_depth = v
         else

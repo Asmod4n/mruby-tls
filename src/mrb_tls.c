@@ -543,6 +543,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   mrb_define_const(mrb, tls_proto_mod, "TLSv1_1", mrb_fixnum_value(TLS_PROTOCOL_TLSv1_1));
   mrb_define_const(mrb, tls_proto_mod, "TLSv1_2", mrb_fixnum_value(TLS_PROTOCOL_TLSv1_2));
   mrb_define_const(mrb, tls_proto_mod, "TLSv1",   mrb_fixnum_value(TLS_PROTOCOL_TLSv1));
+  mrb_define_const(mrb, tls_proto_mod, "All",     mrb_fixnum_value(TLS_PROTOCOLS_ALL));
   mrb_define_const(mrb, tls_proto_mod, "Default", mrb_fixnum_value(TLS_PROTOCOLS_DEFAULT));
 
 
