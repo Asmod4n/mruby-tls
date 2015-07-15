@@ -373,8 +373,9 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
   if (socket < INT_MIN||socket > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "socket is out of range");
 
-  mrb_value cctx_val = mrb_obj_value(mrb_obj_alloc(mrb, MRB_TT_DATA,
-    mrb_class_get_under(mrb, mrb_module_get(mrb, "Tls"), "Server")));
+  mrb_value cctx_val = mrb_obj_value(
+    mrb_obj_alloc(mrb, MRB_TT_DATA,
+      mrb_class_ptr(self)));
   tls_t *cctx = NULL;
   int rc;
 
