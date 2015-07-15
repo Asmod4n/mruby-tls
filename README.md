@@ -9,7 +9,8 @@ Example
 =======
 ```ruby
 client = Tls::Client.new
-print client.connect("github.com:443").write("GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n").read
+client.connect("github.com:443").write("GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n")
+print client.read
 client.close
 ```
 
