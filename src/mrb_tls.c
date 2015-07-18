@@ -309,6 +309,7 @@ mrb_tls_client(mrb_state *mrb, mrb_value self)
     } else {
       if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
         mrb_sys_fail(mrb, tls_error(ctx));
+      mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
     }
   }
   else
@@ -338,6 +339,7 @@ mrb_tls_server(mrb_state *mrb, mrb_value self)
     } else {
       if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
         mrb_sys_fail(mrb, tls_error(ctx));
+      mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
     }
   }
   else
@@ -361,6 +363,8 @@ mrb_tls_configure(mrb_state *mrb, mrb_value self)
   errno = 0;
   if (mrb_conf_tls(mrb, (tls_t *) DATA_PTR(self), config_obj) == -1)
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
+
+  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
 
   return self;
 }
@@ -488,8 +492,9 @@ static mrb_value
 mrb_tls_read(mrb_state *mrb, mrb_value self)
 {
   mrb_int buf_len = 16384;
+  mrb_value unused;
 
-  mrb_get_args(mrb, "|i", &buf_len);
+  mrb_get_args(mrb, "|io", &buf_len, &unused);
 
   mrb_value buf = mrb_str_buf_new(mrb, buf_len);
   size_t outlen;
@@ -514,8 +519,9 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 {
   char *buf;
   mrb_int buf_len;
+  mrb_value unused;
 
-  mrb_get_args(mrb, "s", &buf, &buf_len);
+  mrb_get_args(mrb, "s|o", &buf, &buf_len, &unused);
 
   size_t outlen;
   int rc;
@@ -590,8 +596,8 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   MRB_SET_INSTANCE_TT(tls_ctx_c, MRB_TT_DATA);
   mrb_define_method(mrb, tls_ctx_c, "configure",       mrb_tls_configure,      MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_ctx_c, "reset",           mrb_tls_reset,          MRB_ARGS_NONE());
-  mrb_define_method(mrb, tls_ctx_c, "read",            mrb_tls_read,           MRB_ARGS_OPT(1));
-  mrb_define_method(mrb, tls_ctx_c, "write",           mrb_tls_write,          MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, tls_ctx_c, "read",            mrb_tls_read,           MRB_ARGS_OPT(2));
+  mrb_define_method(mrb, tls_ctx_c, "write",           mrb_tls_write,          MRB_ARGS_ARG(1, 1));
   mrb_define_method(mrb, tls_ctx_c, "close",           mrb_tls_close,          MRB_ARGS_NONE());
 
   tls_cli_c = mrb_define_class_under(mrb, tls_mod, "Client", tls_ctx_c);
