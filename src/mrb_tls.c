@@ -251,7 +251,6 @@ mrb_tls_config_set_verify_depth(mrb_state *mrb, mrb_value self)
   if (verify_depth < INT_MIN||verify_depth > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "verify_depth is out of range");
 
-
   tls_config_set_verify_depth((tls_config_t *) DATA_PTR(self),
     (int) verify_depth);
 
@@ -390,20 +389,14 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
     mrb_obj_alloc(mrb, MRB_TT_DATA,
       mrb_class_ptr(self)));
   tls_t *cctx = NULL;
-  int rc;
   errno = 0;
-  do {
-    rc = tls_accept_socket((tls_t *) DATA_PTR(self), &cctx, (int) socket);
-    if (rc == 0) {
-      mrb_data_init(cctx_val, cctx, &tls_type);
-      return cctx_val;
-    }
-    else
-    if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_accept_socket((tls_t *) DATA_PTR(self), &cctx, (int) socket);
+  if (rc == 0) {
+    mrb_data_init(cctx_val, cctx, &tls_type);
+    return cctx_val;
+  }
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -415,18 +408,12 @@ mrb_tls_connect(mrb_state *mrb, mrb_value self)
 
   mrb_get_args(mrb, "z|z", &host, &port);
 
-  int rc;
   errno = 0;
-  do {
-    rc = tls_connect((tls_t *) DATA_PTR(self), host, port);
-    if (rc == 0)
-      return self;
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_connect((tls_t *) DATA_PTR(self), host, port);
+  if (rc == 0)
+    return self;
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -445,18 +432,12 @@ mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
   if (fd_write < INT_MIN||fd_write > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "fd_write is out of range");
 
-  int rc;
   errno = 0;
-  do {
-    rc = tls_connect_fds((tls_t *) DATA_PTR(self), fd_read, fd_write, hostname);
-    if (rc == 0)
-      return self;
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_connect_fds((tls_t *) DATA_PTR(self), fd_read, fd_write, hostname);
+  if (rc == 0)
+    return self;
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -472,18 +453,12 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
   if (socket < INT_MIN||socket > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "socket is out of range");
 
-  int rc;
   errno = 0;
-  do {
-    rc = tls_connect_socket((tls_t *) DATA_PTR(self), socket, hostname);
-    if (rc == 0)
-      return self;
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_connect_socket((tls_t *) DATA_PTR(self), socket, hostname);
+  if (rc == 0)
+    return self;
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -492,24 +467,17 @@ static mrb_value
 mrb_tls_read(mrb_state *mrb, mrb_value self)
 {
   mrb_int buf_len = 16384;
-  mrb_value unused;
 
-  mrb_get_args(mrb, "|io", &buf_len, &unused);
+  mrb_get_args(mrb, "|i", &buf_len);
 
   mrb_value buf = mrb_str_buf_new(mrb, buf_len);
   size_t outlen;
-  int rc;
   errno = 0;
-  do {
-    rc = tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf), &outlen);
-    if (rc == 0)
-      return mrb_str_resize(mrb, buf, (mrb_int) outlen);
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf), &outlen);
+  if (rc == 0)
+    return mrb_str_resize(mrb, buf, (mrb_int) outlen);
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -519,23 +487,16 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 {
   char *buf;
   mrb_int buf_len;
-  mrb_value unused;
 
-  mrb_get_args(mrb, "s|o", &buf, &buf_len, &unused);
+  mrb_get_args(mrb, "s", &buf, &buf_len);
 
   size_t outlen;
-  int rc;
   errno = 0;
-  do {
-    rc = tls_write((tls_t *) DATA_PTR(self), buf, (size_t) buf_len, &outlen);
-    if (rc == 0)
-      return mrb_fixnum_value(outlen);
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_write((tls_t *) DATA_PTR(self), buf, (size_t) buf_len, &outlen);
+  if (rc == 0)
+    return mrb_fixnum_value(outlen);
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
@@ -543,18 +504,12 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_close(mrb_state *mrb, mrb_value self)
 {
-  int rc;
   errno = 0;
-  do {
-    rc = tls_close((tls_t *) DATA_PTR(self));
-    if (rc == 0)
-      return self;
-    else
-    if (rc == TLS_READ_AGAIN || rc == TLS_WRITE_AGAIN)
-      continue;
-    else
-      mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
-  } while(1);
+  int rc = tls_close((tls_t *) DATA_PTR(self));
+  if (rc == 0)
+    return self;
+  else
+    mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
 }
