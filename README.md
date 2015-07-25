@@ -30,9 +30,18 @@ If your ca certs are in another path.
 client = Tls::Client.new(ca_file: '/usr/local/etc/libressl/cert.pem')
 ```
 
-Server example
+If you later want to change a config setting
 ```ruby
-tls_server = Tls::Server.new(key_file: 'privkey.pem', cert_file: 'cacert.pem')
+client.config.ca_file = '/etc/ssl/cert.pem'
+```
+
+Server example
+```sh
+openssl ecparam -name secp256r1 -genkey -out private-key.pem
+openssl req -new -x509 -key private-key.pem -out server.pem
+```
+```ruby
+tls_server = Tls::Server.new(key_file: 'private-key.pem', cert_file: 'server.pem')
 tcp_server = TCPServer.new 5000 # requires mruby-socket
 tcp_client = tcp_server.accept
 tls_client = tls_server.accept_socket tcp_client.fileno
@@ -40,10 +49,7 @@ tls_client.write "hallo\n"
 tls_client.close
 ```
 
-If you later want to change a config setting
-```ruby
-client.config.ca_file = '/etc/ssl/cert.pem'
-```
+Client Connections don't have a configureable config at the moment
 
 The following Errors can be thrown:
 ```ruby
