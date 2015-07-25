@@ -308,7 +308,7 @@ mrb_tls_client(mrb_state *mrb, mrb_value self)
     } else {
       if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
         mrb_sys_fail(mrb, tls_error(ctx));
-      mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
+      mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@config"), config_obj);
     }
   }
   else
@@ -325,21 +325,17 @@ mrb_tls_client(mrb_state *mrb, mrb_value self)
 static mrb_value
 mrb_tls_server(mrb_state *mrb, mrb_value self)
 {
-  tls_t *ctx;
   mrb_value config_obj;
 
+  mrb_get_args(mrb, "o", &config_obj);
+
   errno = 0;
-  ctx = tls_server();
+  tls_t *ctx = tls_server();
   if (ctx) {
     mrb_data_init(self, ctx, &tls_type);
-    if (mrb_get_args(mrb, "|o", &config_obj) == 0) {
-      if (tls_configure(ctx, NULL) == -1)
-        mrb_sys_fail(mrb, tls_error(ctx));
-    } else {
-      if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
-        mrb_sys_fail(mrb, tls_error(ctx));
-      mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
-    }
+    if (mrb_conf_tls(mrb, ctx, config_obj) == -1)
+      mrb_sys_fail(mrb, tls_error(ctx));
+    mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@config"), config_obj);
   }
   else
   if (errno == ENOMEM) {
@@ -363,7 +359,7 @@ mrb_tls_configure(mrb_state *mrb, mrb_value self)
   if (mrb_conf_tls(mrb, (tls_t *) DATA_PTR(self), config_obj) == -1)
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
-  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "config"), config_obj);
+  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@config"), config_obj);
 
   return self;
 }
@@ -596,7 +592,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   mrb_define_method(mrb, tls_cli_c, "connect_socket",  mrb_tls_connect_socket, MRB_ARGS_REQ(2));
 
   tls_server_c = mrb_define_class_under(mrb, tls_mod, "Server", tls_ctx_c);
-  mrb_define_method(mrb, tls_server_c, "initialize",    mrb_tls_server,         MRB_ARGS_OPT(1));
+  mrb_define_method(mrb, tls_server_c, "initialize",    mrb_tls_server,         MRB_ARGS_REQ(1));
   mrb_define_method(mrb, tls_server_c, "accept_socket", mrb_tls_accept_socket,  MRB_ARGS_REQ(1));
 
   errno = 0;
