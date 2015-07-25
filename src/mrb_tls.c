@@ -521,6 +521,12 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return mrb_fixnum_value(outlen);
   else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
