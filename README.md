@@ -21,6 +21,9 @@ client.connect("github.com", "https")
 ```
 
 You can also use port numbers as the second Argument.
+```ruby
+client.connect("github.com", "443")
+```
 
 
 If your ca certs are in another path you have to create a config object.
@@ -36,4 +39,22 @@ You can also later change the config object.
 client.configure config
 ```
 
-This maps the C Api 1:1, to get a overview http://www.openbsd.org/cgi-bin/man.cgi/OpenBSD-5.7/man3/tls_accept_socket.3?query=tls%5finit&sec=3&manpath=OpenBSD%2d5%2e7 is a good starting point.
+Server example
+```ruby
+config = Tls::Config.new(key_file: 'privkey.pem', cert_file: 'cacert.pem')
+tls_server = Tls::Server.new config
+tcp_server = TCPServer.new 5000 # requires mruby-socket
+tcp_client = tcp_server.accept
+tls_client = tls_server.accept_socket tcp_client.fileno
+tls_client.write "hallo\n"
+tls_client.close
+```
+
+The following Errors can be thrown:
+```ruby
+Errno::*
+Tls::ReadAgain # A read operation is necessary to continue.
+Tls::WriteAgain # A write operation is necessary to continue.
+```
+
+This maps the C Api 1:1, to get a overview http://www.openbsd.org/cgi-bin/man.cgi/OpenBSD-current/man3/tls_accept_fds.3?query=tls%5finit&sec=3 is a good starting point.

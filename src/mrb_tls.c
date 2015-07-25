@@ -385,16 +385,21 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
   if (socket < INT_MIN||socket > INT_MAX)
     mrb_raise(mrb, E_RANGE_ERROR, "socket is out of range");
 
-  mrb_value cctx_val = mrb_obj_value(
-    mrb_obj_alloc(mrb, MRB_TT_DATA,
-      mrb_class_ptr(self)));
   tls_t *cctx = NULL;
   errno = 0;
   int rc = tls_accept_socket((tls_t *) DATA_PTR(self), &cctx, (int) socket);
   if (rc == 0) {
-    mrb_data_init(cctx_val, cctx, &tls_type);
-    return cctx_val;
+    return mrb_obj_value(
+      mrb_data_object_alloc(mrb,
+        mrb_class_get_under(mrb,
+          mrb_module_get(mrb, "Tls"), "Client"), cctx, &tls_type));
   }
+  else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -412,6 +417,12 @@ mrb_tls_connect(mrb_state *mrb, mrb_value self)
   int rc = tls_connect((tls_t *) DATA_PTR(self), host, port);
   if (rc == 0)
     return self;
+  else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -437,6 +448,12 @@ mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
@@ -458,6 +475,12 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
@@ -476,6 +499,12 @@ mrb_tls_read(mrb_state *mrb, mrb_value self)
   int rc = tls_read((tls_t *) DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf), &outlen);
   if (rc == 0)
     return mrb_str_resize(mrb, buf, (mrb_int) outlen);
+  else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -509,6 +538,12 @@ mrb_tls_close(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
+  if (rc == TLS_READ_AGAIN)
+    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
+  if (rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
   return self;
@@ -519,7 +554,6 @@ mrb_mruby_tls_gem_init(mrb_state* mrb) {
   struct RClass *tls_mod, *tls_proto_mod, *tls_conf_c, *tls_ctx_c, *tls_cli_c, *tls_server_c;
 
   tls_mod = mrb_define_module(mrb, "Tls");
-  mrb_define_class_under(mrb, tls_mod, "Error", E_RUNTIME_ERROR);
   mrb_define_module_function(mrb, tls_mod, "load_file", mrb_tls_load_file, MRB_ARGS_ARG(1, 2));
 
   tls_proto_mod = mrb_define_module_under(mrb, tls_mod, "Protocol");
