@@ -8,7 +8,7 @@ module Tls
       case config
       when Config
         super(config)
-      when Hash
+      when Enumerable
         super(Config.new(config))
       when NilClass
         super()
