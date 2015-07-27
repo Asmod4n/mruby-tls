@@ -13,7 +13,7 @@ module Tls
         when :cert_mem
           instance.cert_mem = v
         when :ciphers
-          instance.cipers = v
+          instance.ciphers = v
         when :ecdhecurve
           instance.ecdhecurve = v
         when :key_file
