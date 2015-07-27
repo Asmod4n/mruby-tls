@@ -35,6 +35,13 @@ If you later want to change a config setting
 client.config.ca_file = '/etc/ssl/cert.pem'
 ```
 
+You can also create a configuration object to share with several connections.
+```ruby
+config = Tls::Config.new # see https://github.com/Asmod4n/mruby-tls/blob/master/mrblib/config.rb for options.
+
+client = Tls::Client.new config
+```
+
 Server example
 ```sh
 openssl ecparam -name secp256r1 -genkey -out private-key.pem
