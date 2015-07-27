@@ -3,6 +3,7 @@ module Tls
     attr_reader :config
     alias :recv :read
     alias :send :write
+    alias :config= :configure
 
     def self.new(config = nil)
       case config

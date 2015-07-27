@@ -42,6 +42,11 @@ config = Tls::Config.new # see https://github.com/Asmod4n/mruby-tls/blob/master/
 client = Tls::Client.new config
 ```
 
+You can later on change the configuration object
+```ruby
+client.config = config
+```
+
 Server example
 ```sh
 openssl ecparam -name secp256r1 -genkey -out private-key.pem
