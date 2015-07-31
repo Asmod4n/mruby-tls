@@ -391,11 +391,8 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
           mrb_module_get(mrb, "Tls"), "Client"), cctx, &tls_type));
   }
   else
-  if (rc == TLS_READ_AGAIN)
-    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
-  else
-  if (rc == TLS_WRITE_AGAIN)
-    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -414,11 +411,8 @@ mrb_tls_connect(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
-  if (rc == TLS_READ_AGAIN)
-    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
-  else
-  if (rc == TLS_WRITE_AGAIN)
-    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -444,11 +438,8 @@ mrb_tls_connect_fds(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
-  if (rc == TLS_READ_AGAIN)
-    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
-  else
-  if (rc == TLS_WRITE_AGAIN)
-    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -471,11 +462,8 @@ mrb_tls_connect_socket(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
-  if (rc == TLS_READ_AGAIN)
-    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
-  else
-  if (rc == TLS_WRITE_AGAIN)
-    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
@@ -540,11 +528,8 @@ mrb_tls_close(mrb_state *mrb, mrb_value self)
   if (rc == 0)
     return self;
   else
-  if (rc == TLS_READ_AGAIN)
-    mrb_raise(mrb, E_TLS_READ_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
-  else
-  if (rc == TLS_WRITE_AGAIN)
-    mrb_raise(mrb, E_TLS_WRITE_AGAIN, tls_error((tls_t *) DATA_PTR(self)));
+  if (rc == TLS_READ_AGAIN||rc == TLS_WRITE_AGAIN)
+    mrb_raise(mrb, E_TLS_ERROR, tls_error((tls_t *) DATA_PTR(self)));
   else
     mrb_sys_fail(mrb, tls_error((tls_t *) DATA_PTR(self)));
 
