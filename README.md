@@ -65,7 +65,8 @@ Client Connections don't have a configureable config at the moment
 
 The following Errors can be thrown:
 ```ruby
-Errno::*
+SystemCallError # Errno::*
+Tls::Error # tls_close() tls_connect() tls_accept() return this when you have to repeat the call.
 Tls::ReadAgain # A read operation is necessary to continue.
 Tls::WriteAgain # A write operation is necessary to continue.
 ```
