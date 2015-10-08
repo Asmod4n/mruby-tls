@@ -61,7 +61,7 @@ tls_client.write "hallo\n"
 tls_client.close
 ```
 
-Client Connections don't have a configureable config at the moment
+Client Connections don't have a configurable config at the moment
 
 The following Errors can be thrown:
 ```ruby
