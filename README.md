@@ -66,9 +66,8 @@ Client Connections don't have a configurable config at the moment
 The following Errors can be thrown:
 ```ruby
 SystemCallError # Errno::*
-Tls::Error # tls_close() tls_connect() tls_accept() return this when you have to repeat the call.
-Tls::ReadAgain # A read operation is necessary to continue.
-Tls::WriteAgain # A write operation is necessary to continue.
+Tls::WantPollin # The underlying read file descriptor needs to be readable in order to continue.
+Tls::WantPollout # The underlying write file descriptor needs to be writeable in order to continue.
 ```
 
 This maps the C Api 1:1, to get a overview http://www.openbsd.org/cgi-bin/man.cgi/OpenBSD-current/man3/tls_accept_fds.3?query=tls%5finit&sec=3 is a good starting point.
