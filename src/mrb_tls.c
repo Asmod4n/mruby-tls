@@ -214,7 +214,7 @@ mrb_tls_load_file(mrb_state* mrb, mrb_value self)
 {
     char *file, *password = NULL;
 
-    mrb_get_args(mrb, "z|z", &file, &password);
+    mrb_get_args(mrb, "z|z!", &file, &password);
 
     size_t len;
     uint8_t* cert;
@@ -341,7 +341,7 @@ mrb_tls_connect(mrb_state* mrb, mrb_value self)
 {
     char *host, *port = NULL;
 
-    mrb_get_args(mrb, "z|z", &host, &port);
+    mrb_get_args(mrb, "z|z!", &host, &port);
 
     errno = 0;
     int rc = tls_connect((tls_t*)DATA_PTR(self), host, port);
