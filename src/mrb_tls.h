@@ -21,7 +21,7 @@ mrb_tls_config_free(mrb_state *mrb, void *p)
 }
 
 static const struct mrb_data_type tls_config_type = {
-  "$i_tls_config", mrb_tls_config_free,
+  "$i_tls_config", mrb_tls_config_free
 };
 
 static void
@@ -31,7 +31,7 @@ mrb_tls_free(mrb_state *mrb, void *p)
 }
 
 static const struct mrb_data_type tls_type = {
-  "$i_tls", mrb_tls_free,
+  "$i_tls", mrb_tls_free
 };
 
 #endif
