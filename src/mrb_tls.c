@@ -435,7 +435,7 @@ mrb_tls_connect_socket(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_read(mrb_state* mrb, mrb_value self)
 {
-    mrb_int buf_len = 16384;
+    mrb_int buf_len = 4096;
 
     mrb_get_args(mrb, "|i", &buf_len);
 
@@ -522,6 +522,28 @@ mrb_tls_handshake(mrb_state *mrb, mrb_value self)
     return self;
 }
 
+static mrb_value
+mrb_tls_conn_version(mrb_state *mrb, mrb_value self)
+{
+    const char *version = tls_conn_version((tls_t*)DATA_PTR(self));
+    if (version) {
+        return mrb_str_new_static(mrb, version, strlen(version));
+    } else {
+        mrb_raise(mrb, E_TLS_ERROR, "no connection made yet");
+    }
+}
+
+static mrb_value
+mrb_tls_conn_cipher(mrb_state *mrb, mrb_value self)
+{
+    const char *version = tls_conn_cipher((tls_t*)DATA_PTR(self));
+    if (version) {
+        return mrb_str_new_static(mrb, version, strlen(version));
+    } else {
+        mrb_raise(mrb, E_TLS_ERROR, "no connection made yet");
+    }
+}
+
 void
 mrb_mruby_tls_gem_init(mrb_state* mrb)
 {
@@ -562,6 +584,8 @@ mrb_mruby_tls_gem_init(mrb_state* mrb)
     mrb_define_method(mrb, tls_ctx_c, "write", mrb_tls_write, MRB_ARGS_ARG(1, 1));
     mrb_define_method(mrb, tls_ctx_c, "close", mrb_tls_close, MRB_ARGS_NONE());
     mrb_define_method(mrb, tls_ctx_c, "handshake", mrb_tls_handshake, MRB_ARGS_NONE());
+    mrb_define_method(mrb, tls_ctx_c, "version", mrb_tls_conn_version, MRB_ARGS_NONE());
+    mrb_define_method(mrb, tls_ctx_c, "cipher", mrb_tls_conn_cipher, MRB_ARGS_NONE());
 
     tls_cli_c = mrb_define_class_under(mrb, tls_mod, "Client", tls_ctx_c);
     mrb_define_method(mrb, tls_cli_c, "initialize", mrb_tls_client, MRB_ARGS_OPT(1));
@@ -575,7 +599,11 @@ mrb_mruby_tls_gem_init(mrb_state* mrb)
 
     errno = 0;
     if (tls_init() == -1) {
-        mrb_sys_fail(mrb, "tls_init");
+        if (errno == ENOMEM) {
+          mrb_exc_raise(mrb, mrb_obj_value(mrb->nomem_err));
+        } else {
+          mrb_sys_fail(mrb, "tls_init");
+        }
     }
 }
 
