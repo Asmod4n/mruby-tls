@@ -1,4 +1,4 @@
-﻿#ifndef MRB_TLS_H
+#ifndef MRB_TLS_H
 #define MRB_TLS_H
 
 #include <errno.h>
