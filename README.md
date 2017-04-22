@@ -1,9 +1,21 @@
-﻿# mruby-tls
+# mruby-tls
 
 Prerequisites
 =============
-libtls needs to be somewhere your compiler can find it.
-By default libtls looks in /etc/ssl/cert.pem for ca certs.
+[libtls](https://www.libressl.org) needs to be somewhere the mruby compiler can find it.
+
+For example on macOS you need to add the folowing to your build_config.rb after installing it with
+```brew install libressl```
+
+```ruby
+conf.gem mgem: 'mruby-tls' do |spec|
+  spec.cc.include_paths << '/usr/local/opt/libressl/include'
+  spec.linker.library_paths << '/usr/local/opt/libressl/lib'
+end
+```
+
+By default libtls looks in /etc/ssl/cert.pem for ca certs, you can find how to change that in the examples below.
+
 
 Example
 =======
