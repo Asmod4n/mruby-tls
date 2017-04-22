@@ -228,22 +228,36 @@ mrb_tls_load_file(mrb_state* mrb, mrb_value self)
 
     mrb_get_args(mrb, "z|z!", &file, &password);
 
-    size_t len;
-    uint8_t* cert;
-    struct RString* s = (struct RString*)mrb_obj_alloc(mrb, MRB_TT_STRING, mrb->string_class);
+    size_t len = 0;
+    uint8_t* cert = NULL;
+    mrb_value retval_str = self;
 
     errno = 0;
     cert = tls_load_file((const char*)file, &len, password);
+
     if (cert) {
-        s->as.heap.len = len;
-        s->as.heap.aux.capa = len;
-        s->as.heap.ptr = cert;
-        return mrb_obj_value(s);
+        struct mrb_jmpbuf* prev_jmp = mrb->jmp;
+        struct mrb_jmpbuf c_jmp;
+
+        MRB_TRY(&c_jmp)
+        {
+            mrb->jmp = &c_jmp;
+            retval_str = mrb_str_new(mrb, (const char *) cert, len);
+            free(cert);
+            mrb->jmp = prev_jmp;
+        }
+        MRB_CATCH(&c_jmp)
+        {
+            mrb->jmp = prev_jmp;
+            free(cert);
+            MRB_THROW(mrb->jmp);
+        }
+        MRB_END_EXC(&c_jmp);
     } else {
         mrb_sys_fail(mrb, "tls_load_file");
     }
 
-    return self;
+    return retval_str;
 }
 
 MRB_INLINE int
