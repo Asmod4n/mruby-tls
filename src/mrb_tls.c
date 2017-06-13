@@ -222,6 +222,26 @@ mrb_tls_config_clear_keys(mrb_state* mrb, mrb_value self)
 }
 
 static mrb_value
+mrb_tls_config_noverify(mrb_state* mrb, mrb_value self)
+{
+    char* mode;
+
+    mrb_get_args(mrb, "z", &mode);
+
+    if (strcmp(mode, "cert") == 0) {
+        tls_config_insecure_noverifycert((tls_config_t*)DATA_PTR(self));
+    } else if (strcmp(mode, "name") == 0) {
+        tls_config_insecure_noverifyname((tls_config_t*)DATA_PTR(self));
+    } else if (strcmp(mode, "time") == 0) {
+        tls_config_insecure_noverifytime((tls_config_t*)DATA_PTR(self));
+    } else {
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "unknown noverify mode");
+    }
+
+    return self;
+}
+
+static mrb_value
 mrb_tls_load_file(mrb_state* mrb, mrb_value self)
 {
     char *file, *password = NULL;
@@ -612,6 +632,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb)
     mrb_define_method(mrb, tls_conf_c, "protocols=", mrb_tls_config_set_protocols, MRB_ARGS_REQ(1));
     mrb_define_method(mrb, tls_conf_c, "verify_depth=", mrb_tls_config_set_verify_depth, MRB_ARGS_REQ(1));
     mrb_define_method(mrb, tls_conf_c, "clear_keys", mrb_tls_config_clear_keys, MRB_ARGS_NONE());
+    mrb_define_method(mrb, tls_conf_c, "noverify", mrb_tls_config_noverify, MRB_ARGS_REQ(1));
 
     tls_ctx_c = mrb_define_class_under(mrb, tls_mod, "Context", mrb->object_class);
     MRB_SET_INSTANCE_TT(tls_ctx_c, MRB_TT_DATA);

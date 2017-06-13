@@ -28,6 +28,12 @@ module Tls
           end
         when :verify_depth
           instance.verify_depth = v
+        when :noverify
+          if v == true
+            instance.noverify('cert')
+          else
+            instance.noverify(v)
+          end
         else
           raise ArgumentError, "unknown option #{k}"
         end
