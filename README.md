@@ -17,8 +17,8 @@ end
 By default libtls looks in /etc/ssl/cert.pem for ca certs, you can find how to change that in the examples below.
 
 
-Example
-=======
+Client example with blocking IO
+================================
 ```ruby
 client = Tls::Client.new
 client.connect('github.com:443').write("GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n")
@@ -47,7 +47,57 @@ If you later want to change a config setting
 client.config.ca_file = '/etc/ssl/cert.pem'
 ```
 
-You can also create a configuration object to share with several connections.
+Client example with non blocking IO
+====================================
+requires mruby-poll gem
+```ruby
+tcp_socket = TCPSocket.new "github.com", 443
+client = Tls::Client.new
+client.connect_socket tcp_socket.fileno, "github.com"
+tcp_socket._setnonblock(true)
+poll = Poll.new
+tcp_socket_pi = poll.add(tcp_socket, Poll::Out)
+
+buf = "GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n"
+while buf
+  unless poll.wait
+    raise "Can't write to socket"
+  end
+  tmp = client.write_nonblock(buf)
+  case tmp
+    when :tls_want_pollin
+      tcp_socket_pi.events = Poll::In
+    when :tls_want_pollout
+      tcp_socket_pi.events = Poll::Out
+    when Fixnum
+      buf = buf[tmp+1...-1]
+  end
+end
+
+tcp_socket_pi.events = Poll::In
+poll.wait
+until (buf = client.read_nonblock()).is_a? String
+  case buf
+    when :tls_want_pollin
+      tcp_socket_pi.events = Poll::In
+    when :tls_want_pollout
+      tcp_socket_pi.events = Poll::Out
+  end
+  unless poll.wait
+    raise "Can't read from socket"
+  end
+end
+
+puts buf
+
+tcp_socket._setnonblock(false)
+client.close
+tcp_socket.close
+```
+
+Configuration Examples
+======================
+You can create a configuration object to share with several connections.
 ```ruby
 config = Tls::Config.new # see https://github.com/Asmod4n/mruby-tls/blob/master/mrblib/config.rb for options.
 
@@ -60,6 +110,7 @@ client.config = config
 ```
 
 Server example
+==============
 ```sh
 openssl ecparam -name secp256r1 -genkey -out private-key.pem
 openssl req -new -x509 -key private-key.pem -out server.pem
@@ -75,18 +126,11 @@ tls_client.close
 
 Client Connections don't have a configurable config at the moment
 
-The following Errors can be thrown:
-```ruby
-SystemCallError # Errno::*
-Tls::WantPollin # The underlying read file descriptor needs to be readable in order to continue.
-Tls::WantPollout # The underlying write file descriptor needs to be writeable in order to continue.
-```
-
 This maps the C Api 1:1, to get a overview http://www.openbsd.org/cgi-bin/man.cgi/OpenBSD-current/man3/tls_accept_fds.3?query=tls%5finit&sec=3 is a good starting point.
 
 License
 =======
-Copyright 2015,2016 Hendrik Beskow
+Copyright 2015,2016,2024 Hendrik Beskow
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this project except in compliance with the License.

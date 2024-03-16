@@ -14,7 +14,7 @@ module Tls
       when NilClass
         super()
       else
-        raise ArgumentError, "Cannot handle #{config.class}"
+        raise ArgumentError, "Cannot handle #{config.class.dump}"
       end
     end
   end

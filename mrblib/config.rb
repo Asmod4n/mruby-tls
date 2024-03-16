@@ -35,7 +35,7 @@ module Tls
             instance.noverify(v)
           end
         else
-          raise ArgumentError, "unknown option #{k}"
+          raise ArgumentError, "unknown option #{k.dump}"
         end
       end
       instance
