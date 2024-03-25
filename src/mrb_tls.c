@@ -247,13 +247,13 @@ mrb_tls_load_file(mrb_state* mrb, mrb_value self)
         {
             mrb->jmp = &c_jmp;
             retval_str = mrb_str_new(mrb, (const char *) cert, len);
-            free(cert);
+            tls_unload_file(cert, len);
             mrb->jmp = prev_jmp;
         }
         MRB_CATCH(&c_jmp)
         {
             mrb->jmp = prev_jmp;
-            free(cert);
+            tls_unload_file(cert, len);
             MRB_THROW(mrb->jmp);
         }
         MRB_END_EXC(&c_jmp);
@@ -434,8 +434,8 @@ mrb_tls_read(mrb_state* mrb, mrb_value self)
     while (TRUE) {
         ssize_t rc = tls_read((tls_t*)DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf));
         switch (rc) {
-            case TLS_WANT_POLLIN:
             case TLS_WANT_POLLOUT:
+            case TLS_WANT_POLLIN:
                 continue;
                 break;
             case -1:
@@ -456,10 +456,10 @@ mrb_tls_read_nonblock(mrb_state* mrb, mrb_value self)
     mrb_value buf = mrb_str_buf_new(mrb, buf_len);
     ssize_t rc = tls_read((tls_t*)DATA_PTR(self), RSTRING_PTR(buf), RSTRING_CAPA(buf));
     switch (rc) {
-        case TLS_WANT_POLLIN:
-            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case TLS_WANT_POLLOUT:
             return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollout"));
+        case TLS_WANT_POLLIN:
+            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case -1:
             return mrb_tls_error(mrb, self);
         default:
@@ -480,8 +480,8 @@ mrb_tls_write(mrb_state *mrb, mrb_value self)
     while (len > 0) {
         ssize_t tmp = tls_write((tls_t*) DATA_PTR(self), buf, len);
         switch (tmp) {
-            case TLS_WANT_POLLIN:
             case TLS_WANT_POLLOUT:
+            case TLS_WANT_POLLIN:
                 continue;
                 break;
             case -1:
@@ -508,10 +508,10 @@ mrb_tls_write_nonblock(mrb_state* mrb, mrb_value self)
     errno = 0;
     ssize_t rc = tls_write((tls_t*)DATA_PTR(self), buf, len);
     switch (rc) {
-        case TLS_WANT_POLLIN:
-            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case TLS_WANT_POLLOUT:
             return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollout"));
+        case TLS_WANT_POLLIN:
+            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case -1:
             return mrb_tls_error(mrb, self);
         default:
@@ -528,8 +528,8 @@ mrb_tls_close(mrb_state *mrb, mrb_value self)
         switch (tls_close((tls_t*)DATA_PTR(self))) {
             case 0:
                 return self;
-            case TLS_WANT_POLLIN:
             case TLS_WANT_POLLOUT:
+            case TLS_WANT_POLLIN:
                 continue;
                 break;
             default:
@@ -546,10 +546,10 @@ mrb_tls_close_nonblock(mrb_state *mrb, mrb_value self)
     switch (tls_close((tls_t*)DATA_PTR(self))) {
         case 0:
             return self;
-        case TLS_WANT_POLLIN:
-            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case TLS_WANT_POLLOUT:
             return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollout"));
+        case TLS_WANT_POLLIN:
+            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         default:
             return mrb_tls_error(mrb, self);
     }
@@ -564,8 +564,8 @@ mrb_tls_handshake(mrb_state *mrb, mrb_value self)
         switch (tls_handshake((tls_t*)DATA_PTR(self))) {
             case 0:
                 return self;
-            case TLS_WANT_POLLIN:
             case TLS_WANT_POLLOUT:
+            case TLS_WANT_POLLIN:
                 continue;
                 break;
             default:
@@ -582,10 +582,10 @@ mrb_tls_handshake_nonblock(mrb_state *mrb, mrb_value self)
     switch (tls_handshake((tls_t*)DATA_PTR(self))) {
         case 0:
             return self;
-        case TLS_WANT_POLLIN:
-            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         case TLS_WANT_POLLOUT:
             return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollout"));
+        case TLS_WANT_POLLIN:
+            return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollin"));
         default:
             return mrb_tls_error(mrb, self);
     }
