@@ -359,18 +359,20 @@ mrb_tls_reset(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_accept_socket(mrb_state* mrb, mrb_value self)
 {
-    mrb_int socket;
+    mrb_value socket;
 
-    mrb_get_args(mrb, "i", &socket);
+    mrb_get_args(mrb, "o", &socket);
 
     tls_t* cctx = NULL;
     errno = 0;
-    if (tls_accept_socket((tls_t*)DATA_PTR(self), &cctx, (int)socket) == 0) {
+    if (tls_accept_socket((tls_t*)DATA_PTR(self), &cctx, (int) mrb_fixnum(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno"))) == 0) {
         struct RData* client_data = mrb_data_object_alloc(mrb,
             mrb_class_get_under(mrb,
               mrb_module_get(mrb, "Tls"), "Client"),
             cctx, &tls_type);
-        return mrb_obj_value(client_data);
+        mrb_value client = mrb_obj_value(client_data);
+        mrb_iv_set(mrb, client, mrb_intern_lit(mrb, "socket"), socket);
+        return client;
     } else {
         return mrb_tls_error(mrb, self);
     }
@@ -394,15 +396,20 @@ mrb_tls_connect(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_connect_fds(mrb_state* mrb, mrb_value self)
 {
-    mrb_int fd_read, fd_write;
+    mrb_value fd_read, fd_write;
     char* hostname;
 
-    mrb_get_args(mrb, "iiz", &fd_read, &fd_write, &hostname);
+    mrb_get_args(mrb, "ooz", &fd_read, &fd_write, &hostname);
 
     errno = 0;
-    if (tls_connect_fds((tls_t*)DATA_PTR(self), (int) fd_read, (int) fd_write, hostname) == -1) {
+    if (tls_connect_fds((tls_t*)DATA_PTR(self),
+        (int) mrb_fixnum(mrb_convert_type(mrb, fd_read, MRB_TT_INTEGER, "Integer", "fileno")),
+        (int) mrb_fixnum(mrb_convert_type(mrb, fd_write, MRB_TT_INTEGER, "Integer", "fileno")),
+        hostname) == -1) {
         mrb_tls_error(mrb, self);
     }
+    mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "fd_read"), fd_read);
+    mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "fd_write"), fd_write);
 
     return self;
 }
@@ -410,15 +417,18 @@ mrb_tls_connect_fds(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_connect_socket(mrb_state* mrb, mrb_value self)
 {
-    mrb_int socket;
+    mrb_value socket;
     char* hostname;
 
-    mrb_get_args(mrb, "iz", &socket, &hostname);
+    mrb_get_args(mrb, "oz", &socket, &hostname);
 
     errno = 0;
-    if (tls_connect_socket((tls_t*)DATA_PTR(self), (int) socket, hostname) == -1) {
+    if (tls_connect_socket((tls_t*)DATA_PTR(self),
+        (int) mrb_fixnum(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno")), hostname) == -1) {
         mrb_tls_error(mrb, self);
     }
+
+    mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "socket"), socket);
 
     return self;
 }
@@ -426,7 +436,7 @@ mrb_tls_connect_socket(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_read(mrb_state* mrb, mrb_value self)
 {
-    mrb_int buf_len = 4096;
+    mrb_int buf_len = 9000;
     mrb_get_args(mrb, "|i", &buf_len);
 
     errno = 0;
@@ -449,7 +459,7 @@ mrb_tls_read(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_tls_read_nonblock(mrb_state* mrb, mrb_value self)
 {
-    mrb_int buf_len = 4096;
+    mrb_int buf_len = 9000;
     mrb_get_args(mrb, "|i", &buf_len);
 
     errno = 0;
@@ -524,6 +534,10 @@ mrb_tls_close(mrb_state *mrb, mrb_value self)
 {
     errno = 0;
 
+    mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "socket"));
+    mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "fd_read"));
+    mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "fd_write"));
+
     while (TRUE) {
         switch (tls_close((tls_t*)DATA_PTR(self))) {
             case 0:
@@ -544,8 +558,12 @@ mrb_tls_close_nonblock(mrb_state *mrb, mrb_value self)
     errno = 0;
 
     switch (tls_close((tls_t*)DATA_PTR(self))) {
-        case 0:
+        case 0: {
+            mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "socket"));
+            mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "fd_read"));
+            mrb_iv_remove(mrb, self, mrb_intern_lit(mrb, "fd_write"));
             return self;
+        }
         case TLS_WANT_POLLOUT:
             return mrb_symbol_value(mrb_intern_lit(mrb, "tls_want_pollout"));
         case TLS_WANT_POLLIN:
