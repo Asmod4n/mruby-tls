@@ -365,7 +365,7 @@ mrb_tls_accept_socket(mrb_state* mrb, mrb_value self)
 
     tls_t* cctx = NULL;
     errno = 0;
-    if (tls_accept_socket((tls_t*)DATA_PTR(self), &cctx, (int) mrb_fixnum(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno"))) == 0) {
+    if (tls_accept_socket((tls_t*)DATA_PTR(self), &cctx, (int) mrb_integer(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno"))) == 0) {
         struct RData* client_data = mrb_data_object_alloc(mrb,
             mrb_class_get_under(mrb,
               mrb_module_get(mrb, "Tls"), "Client"),
@@ -403,8 +403,8 @@ mrb_tls_connect_fds(mrb_state* mrb, mrb_value self)
 
     errno = 0;
     if (tls_connect_fds((tls_t*)DATA_PTR(self),
-        (int) mrb_fixnum(mrb_convert_type(mrb, fd_read, MRB_TT_INTEGER, "Integer", "fileno")),
-        (int) mrb_fixnum(mrb_convert_type(mrb, fd_write, MRB_TT_INTEGER, "Integer", "fileno")),
+        (int) mrb_integer(mrb_convert_type(mrb, fd_read, MRB_TT_INTEGER, "Integer", "fileno")),
+        (int) mrb_integer(mrb_convert_type(mrb, fd_write, MRB_TT_INTEGER, "Integer", "fileno")),
         hostname) == -1) {
         mrb_tls_error(mrb, self);
     }
@@ -424,7 +424,7 @@ mrb_tls_connect_socket(mrb_state* mrb, mrb_value self)
 
     errno = 0;
     if (tls_connect_socket((tls_t*)DATA_PTR(self),
-        (int) mrb_fixnum(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno")), hostname) == -1) {
+        (int) mrb_integer(mrb_convert_type(mrb, socket, MRB_TT_INTEGER, "Integer", "fileno")), hostname) == -1) {
         mrb_tls_error(mrb, self);
     }
 
