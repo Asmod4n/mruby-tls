@@ -4,9 +4,6 @@
   spec.summary = 'mruby bindings to libtls'
 
   unless File.file? "#{spec.build_dir}/build/lib/libtls.a"
-    ENV['CC'] = spec.cc.command
-    ENV['CFLAGS'] = spec.cc.flags.join(' ')
-    ENV['LDFLAGS'] = spec.linker.flags.join(' ')
     command = "mkdir -p #{spec.build_dir}/build && cd #{spec.dir}/deps/libressl-4.0.0/ &&"
     command << " ./configure --prefix=\"#{spec.build_dir}/build\" "
     command << "--enable-shared=no && make -j$(nproc) check && make -j$(nproc) install && make -j$(nproc) distclean"
