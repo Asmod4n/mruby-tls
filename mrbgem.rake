@@ -11,8 +11,8 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   spec.author  = 'Hendrik Beskow'
   spec.summary = 'mruby bindings to libtls'
 
-  build_dir    = "#{spec.build_dir}/build"
-  libressl_dir = "#{spec.dir}/deps/libressl-4.1.0"
+  build_dir    = "#{spec.build_dir}/build/"
+  libressl_dir = "#{spec.dir}/deps/libressl-4.0.0"
 
   is_windows = RbConfig::CONFIG['host_os'] =~ /mswin|mingw|cygwin/
 
@@ -42,7 +42,7 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
 
   unless is_windows
     ENV['PKG_CONFIG_PATH'] = "#{build_dir}/pkgconfig:" + (ENV['PKG_CONFIG_PATH'] || '')
-    spec.cc.flags += [`pkg-config --static --cflags libtls`.strip]
+    spec.cxx.flags += [`pkg-config --static --cflags libtls`.strip]
     spec.linker.flags += [`pkg-config --static --libs-only-L libtls`.strip]
   end
 
