@@ -36,4 +36,4 @@ build_config.rb.lock
 .cache
 compile_commands.json
 /mruby/
-mruby
+/.vscode/
