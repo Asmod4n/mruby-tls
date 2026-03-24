@@ -11,6 +11,7 @@
 #include <mruby/class.h>
 #include <mruby/error.h>
 #include <mruby/variable.h>
+#include <mruby/presym.h>
 
 typedef struct tls tls_t;
 typedef struct tls_config tls_config_t;
