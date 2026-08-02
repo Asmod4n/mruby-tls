@@ -464,6 +464,8 @@ mrb_tls_config_alloc(mrb_state *mrb, mrb_value self)
   cfg->verify_cert = 1;
   cfg->verify_name = 1;
   cfg->verify_time = 1;
+  mbedtls_x509_crt_init(&cfg->cert);
+  mbedtls_pk_init(&cfg->pk);
   return cfg;
 }
 
@@ -1392,6 +1394,18 @@ mrb_tls_ctx_destroy(mrb_state *mrb, mrb_tls_ctx_t *ctx)
   memset(ctx, 0, sizeof(*ctx));
 }
 
+/* Frees the SNI-selected certificate cache -- see mrb_tls_config_ensure_cert()
+ * and mrb_tls_config_t's own comment. A no-op (mbedtls_x509_crt_free/
+ * mbedtls_pk_free on a never-initialized struct) for the overwhelmingly
+ * common Tls::Config that is never handed to an SNI callback at all. */
+void
+mrb_tls_config_destroy(mrb_state *mrb, mrb_tls_config_t *cfg)
+{
+  (void)mrb;
+  mbedtls_x509_crt_free(&cfg->cert);
+  mbedtls_pk_free(&cfg->pk);
+}
+
 /* Allocates ctx and attaches it to `self` (mrb_data_init) before anything
  * else runs, so it's GC-owned from the start instead of sitting as a bare,
  * unowned pointer between allocation and attachment. */
@@ -1431,6 +1445,183 @@ mrb_tls_ivar_cstr(mrb_state *mrb, mrb_value obj, mrb_sym sym)
 {
   mrb_value v = mrb_iv_get(mrb, obj, sym);
   return mrb_string_p(v) ? RSTRING_PTR(v) : NULL;
+}
+
+/*
+ * Lazily parses `cfg_obj`'s own cert_file/cert_mem + key_file/key_mem ivars
+ * into cfg->cert/cfg->pk, exactly once no matter how many connections
+ * resolve to this same Config afterward (see mrb_tls_config_t's own
+ * comment) -- used only by the SNI dispatch path (mrb_tls_sni_cb()); the
+ * ordinary default-certificate path in mrb_tls_ctx_setup() is untouched by
+ * this and keeps parsing straight into the Context's own ctx->cert/ctx->pk
+ * as before.
+ *
+ * Returns 1 if cfg->cert/cfg->pk are now usable, 0 if this Config carries
+ * no cert/key material at all (not an error by itself -- mirrors
+ * mrb_tls_ctx_setup()'s own have_cert/have_key optionality), or -1 on a
+ * genuine parse failure, with *errmsg set to what failed. Deliberately does
+ * not raise: called from mrb_tls_sni_cb(), deep inside mbedTLS's C call
+ * stack, where raising directly is not safe -- see that function's own
+ * comment.
+ */
+static int
+mrb_tls_config_ensure_cert(mrb_state *mrb, mrb_value cfg_obj, mrb_tls_config_t *cfg, const char **errmsg)
+{
+  if (cfg->cert_loaded) {
+    return 1;
+  }
+
+  const char *cert_file = mrb_tls_ivar_cstr(mrb, cfg_obj, MRB_SYM(cert_file));
+  const char *key_file = mrb_tls_ivar_cstr(mrb, cfg_obj, MRB_SYM(key_file));
+  size_t cert_mem_len = 0, key_mem_len = 0;
+  const uint8_t *cert_mem = mrb_tls_ivar_buf_get(mrb, cfg_obj, MRB_SYM(cert_mem), &cert_mem_len);
+  const uint8_t *key_mem = mrb_tls_ivar_buf_get(mrb, cfg_obj, MRB_SYM(key_mem), &key_mem_len);
+  int have_cert = 0, have_key = 0;
+  int ret;
+
+  if (cert_mem != NULL) {
+    ret = mbedtls_x509_crt_parse(&cfg->cert, cert_mem, mrb_tls_parse_len(cert_mem, cert_mem_len));
+    if (ret < 0) {
+      *errmsg = "cert_mem";
+      return -1;
+    }
+    have_cert = 1;
+  } else if (cert_file != NULL) {
+    ret = mbedtls_x509_crt_parse_file(&cfg->cert, cert_file);
+    if (ret < 0) {
+      *errmsg = "cert_file";
+      return -1;
+    }
+    have_cert = 1;
+  }
+
+  if (key_mem != NULL) {
+    ret = mbedtls_pk_parse_key(&cfg->pk, key_mem, mrb_tls_parse_len(key_mem, key_mem_len), NULL, 0);
+    if (ret != 0) {
+      *errmsg = "key_mem";
+      return -1;
+    }
+    have_key = 1;
+  } else if (key_file != NULL) {
+    ret = mbedtls_pk_parse_keyfile(&cfg->pk, key_file, NULL);
+    if (ret != 0) {
+      *errmsg = "key_file";
+      return -1;
+    }
+    have_key = 1;
+  }
+
+  if (have_cert != have_key) {
+    *errmsg = "both a certificate and a key are required";
+    return -1;
+  }
+  if (!have_cert) {
+    return 0;
+  }
+
+  cfg->cert_loaded = 1;
+  return 1;
+}
+
+/* ------------------------------------------------------------------------ */
+/* SNI (Tls::Server.new(config) { |hostname| ... })                          */
+/* ------------------------------------------------------------------------ */
+
+typedef struct {
+  mrb_value block;
+  const char *name;
+  size_t name_len;
+} mrb_tls_sni_call_t;
+
+static mrb_value
+mrb_tls_sni_call_body(mrb_state *mrb, void *data)
+{
+  mrb_tls_sni_call_t *c = (mrb_tls_sni_call_t *)data;
+  mrb_value hostname = mrb_str_new(mrb, c->name, (mrb_int)c->name_len);
+  return mrb_yield(mrb, c->block, hostname);
+}
+
+/*
+ * mbedTLS's SNI hook (mbedtls_ssl_conf_sni()), fired mid-handshake -- after
+ * ClientHello's SNI extension is parsed, before the certificate goes out --
+ * with the requested hostname. `p_info` is the mrb_tls_ctx_t* for the
+ * accepted connection whose handshake is in progress (registered as such
+ * in mrb_tls_ctx_setup(), same pattern as mrb_tls_verify_cb()).
+ *
+ * Unlike mrb_tls_verify_cb(), this one has to call back into Ruby (the
+ * hostname -> Tls::Config lookup lives there, e.g. a plain Hash) -- and
+ * that call happens deep inside mbedTLS's plain-C call stack, where a Ruby
+ * exception unwinding straight through would be undefined behavior. Same
+ * discipline as mrb_tls_bio_send()/_recv(): the call goes through
+ * mrb_protect_error(), and any exception raised by the block is stashed as
+ * @pending_exception (checked by mrb_tls_check_pending_exception() right
+ * after mbedtls_ssl_handshake() returns in mrb_tls_handshake_step(), the
+ * next safe-to-raise point) rather than propagated here. Every failure path
+ * below returns a negative code, which fails the handshake outright --
+ * matching a real client presenting no cert (mbedTLS handles this the same
+ * way for a hard SNI failure) rather than silently falling back to
+ * whichever cert this connection's Context happened to load by default.
+ */
+static int
+mrb_tls_sni_cb(void *p_info, mbedtls_ssl_context *ssl, const unsigned char *name, size_t name_len)
+{
+  mrb_tls_ctx_t *ctx = (mrb_tls_ctx_t *)p_info;
+  mrb_state *mrb = ctx->mrb;
+
+  mrb_value block = mrb_iv_get(mrb, ctx->self, MRB_SYM(sni));
+  if (mrb_nil_p(block)) {
+    /* No SNI handler installed on this connection after all (copied from
+     * the Tls::Server that accepted it, in mrb_tls_accept_socket() -- see
+     * its own comment) -- keep whatever default cert ctx_setup already
+     * configured. */
+    return 0;
+  }
+
+  mrb_tls_sni_call_t call;
+  call.block = block;
+  call.name = (const char *)name;
+  call.name_len = name_len;
+
+  mrb_bool error = FALSE;
+  mrb_value result = mrb_protect_error(mrb, mrb_tls_sni_call_body, &call, &error);
+  if (error) {
+    mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_exception), result);
+    return -1;
+  }
+
+  if (mrb_nil_p(result)) {
+    /* The block explicitly chose the default cert for this hostname. */
+    return 0;
+  }
+  if (mrb_type(result) != MRB_TT_DATA || DATA_TYPE(result) != &tls_config_type) {
+    mrb_value exc = mrb_exc_new_str(mrb, E_TLS_ERROR,
+        mrb_str_new_cstr(mrb, "sni block must return a Tls::Config or nil"));
+    mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_exception), exc);
+    return -1;
+  }
+
+  mrb_tls_config_t *sel_cfg = (mrb_tls_config_t *)DATA_PTR(result);
+  const char *errmsg = NULL;
+  int have = mrb_tls_config_ensure_cert(mrb, result, sel_cfg, &errmsg);
+  if (have <= 0) {
+    char msg[MRB_TLS_FAIL_MSG_BUFLEN];
+    mrb_tls_errmsg(msg, sizeof(msg), 0,
+        have < 0 ? errmsg : "sni-selected config has no certificate");
+    mrb_value exc = mrb_exc_new_str(mrb, E_TLS_ERROR, mrb_str_new_cstr(mrb, msg));
+    mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_exception), exc);
+    return -1;
+  }
+
+  int ret = mbedtls_ssl_set_hs_own_cert(ssl, &sel_cfg->cert, &sel_cfg->pk);
+  if (ret != 0) {
+    char msg[MRB_TLS_FAIL_MSG_BUFLEN];
+    mrb_tls_errmsg(msg, sizeof(msg), ret, "mbedtls_ssl_set_hs_own_cert");
+    mrb_value exc = mrb_exc_new_str(mrb, E_TLS_ERROR, mrb_str_new_cstr(mrb, msg));
+    mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_exception), exc);
+    return -1;
+  }
+
+  return 0;
 }
 
 /* Builds the mbedtls_ssl_config/SSL context from the attached Tls::Config,
@@ -1603,6 +1794,21 @@ mrb_tls_ctx_setup(mrb_state *mrb, mrb_value self, mrb_tls_ctx_t *ctx)
   mbedtls_ssl_conf_authmode(&ctx->conf, ctx->authmode);
   if (ctx->authmode != MBEDTLS_SSL_VERIFY_NONE) {
     mbedtls_ssl_conf_verify(&ctx->conf, mrb_tls_verify_cb, ctx);
+  }
+
+  /* SNI: only ever meaningful for a server, and only when this connection
+   * actually has an @sni block (copied from the accepting Tls::Server onto
+   * the accepted Tls::Client in mrb_tls_accept_socket() -- a plain
+   * #accept_socket call with no SNI configured never sets it, so this stays
+   * a no-op for every server that hasn't opted in). Registering the
+   * callback here, rather than checking @sni again inside it, keeps
+   * mrb_tls_sni_cb() itself simple: by the time it can possibly run,
+   * @sni is already known to be present. ctx->mrb/ctx->self, which the
+   * callback reads, are set a few lines below -- safe regardless, since
+   * mbedtls_ssl_conf_sni() only stores the callback for a *later* handshake
+   * call, it does not invoke it immediately. */
+  if (ctx->endpoint == MBEDTLS_SSL_IS_SERVER && !mrb_nil_p(mrb_iv_get(mrb, self, MRB_SYM(sni)))) {
+    mbedtls_ssl_conf_sni(&ctx->conf, mrb_tls_sni_cb, ctx);
   }
 
   errno = 0;
@@ -1784,9 +1990,10 @@ static mrb_value
 mrb_tls_server(mrb_state *mrb, mrb_value self)
 {
   mrb_value config_obj;
+  mrb_value sni_block = mrb_nil_value();
   mrb_tls_ctx_t *ctx;
 
-  mrb_get_args(mrb, "o", &config_obj);
+  mrb_get_args(mrb, "o&", &config_obj, &sni_block);
 
   ctx = mrb_tls_ctx_new(mrb, self);
   ctx->endpoint = MBEDTLS_SSL_IS_SERVER;
@@ -1795,6 +2002,11 @@ mrb_tls_server(mrb_state *mrb, mrb_value self)
   ctx->cfg = (mrb_tls_config_t *)DATA_PTR(config_obj);
   mrb_iv_set(mrb, self, MRB_IVSYM(config), config_obj);
   mrb_iv_set(mrb, self, MRB_SYM(cfg), config_obj);
+  /* @sni stays nil (never set) when no block is given -- see
+   * mrb_tls_ctx_setup()'s own check. */
+  if (!mrb_nil_p(sni_block)) {
+    mrb_iv_set(mrb, self, MRB_SYM(sni), sni_block);
+  }
 
   return self;
 }
@@ -2001,6 +2213,13 @@ mrb_tls_accept_socket(mrb_state *mrb, mrb_value self)
    */
   mrb_iv_set(mrb, client, MRB_SYM(cfg), mrb_iv_get(mrb, self, MRB_SYM(cfg)));
   mrb_iv_set(mrb, client, MRB_SYM(socket), socket);
+  /* Same borrowing as @cfg just above, for the same reason: mrb_tls_sni_cb()
+   * reads @sni off the *connection's* own Context (ctx->self), not the
+   * Tls::Server that accepted it -- copy it across, or a server configured
+   * with an sni block would silently never dispatch it for any connection
+   * it accepts. Stays nil (i.e. genuinely absent, not just falsy) when the
+   * server was never given one -- see mrb_tls_server(). */
+  mrb_iv_set(mrb, client, MRB_SYM(sni), mrb_iv_get(mrb, self, MRB_SYM(sni)));
 
   mrb_tls_ctx_setup(mrb, client, cctx);
 
@@ -2430,7 +2649,7 @@ mrb_mruby_tls_gem_init(mrb_state* mrb)
     mrb_define_method_id(mrb, tls_cli_c, MRB_SYM(connect_socket), mrb_tls_connect_socket, MRB_ARGS_REQ(2));
 
     tls_server_c = mrb_define_class_under_id(mrb, tls_mod, MRB_SYM(Server), tls_ctx_c);
-    mrb_define_method_id(mrb, tls_server_c, MRB_SYM(initialize), mrb_tls_server, MRB_ARGS_REQ(1));
+    mrb_define_method_id(mrb, tls_server_c, MRB_SYM(initialize), mrb_tls_server, MRB_ARGS_REQ(1)|MRB_ARGS_BLOCK());
     mrb_define_method_id(mrb, tls_server_c, MRB_SYM(accept_socket), mrb_tls_accept_socket, MRB_ARGS_REQ(1));
 }
 

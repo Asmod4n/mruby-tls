@@ -92,6 +92,20 @@ typedef struct mrb_tls_config {
   int verify_cert;
   int verify_name;
   int verify_time;
+
+  /*
+   * Lazily parsed from this Config's own cert_file/cert_mem + key_file/
+   * key_mem ivars the first time it is selected as an SNI certificate (see
+   * mrb_tls_config_ensure_cert() in mrb_tls.cpp) -- reused by every
+   * connection that resolves to this same Config afterward instead of
+   * re-parsing the same PEM text on every single handshake. Left unused
+   * (cert_loaded stays 0) by the ordinary, non-SNI path: a Context's own
+   * default certificate is still parsed straight into the Context's own
+   * ctx->cert/ctx->pk in mrb_tls_ctx_setup(), exactly as before.
+   */
+  mbedtls_x509_crt cert;
+  mbedtls_pk_context pk;
+  int cert_loaded;
 } mrb_tls_config_t;
 
 /* Tls::Context (and Tls::Client/Tls::Server) backing store. Owns everything
@@ -135,10 +149,15 @@ typedef struct mrb_tls_ctx {
   mrb_value self;
 } mrb_tls_ctx_t;
 
+void mrb_tls_config_destroy(mrb_state *mrb, mrb_tls_config_t *cfg);
+
 static void
 mrb_tls_config_free(mrb_state *mrb, void *p)
 {
-  mrb_free(mrb, p);
+  if (p) {
+    mrb_tls_config_destroy(mrb, (mrb_tls_config_t *)p);
+    mrb_free(mrb, p);
+  }
 }
 
 static const struct mrb_data_type tls_config_type = {
