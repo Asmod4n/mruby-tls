@@ -1130,10 +1130,21 @@ mrb_tls_bio_send(void *p_bio, const unsigned char *buf, size_t len)
   if (mrb_integer_p(result)) {
     return (int)mrb_integer(result);
   }
-  /* Not an Integer: a genuinely async Operation, still in flight. Mark
-   * @pending_send with the in-flight sentinel (checked above) so a retry
-   * before completion doesn't submit a second, overlapping send -- the
-   * resume block overwrites this with the real Operation once reaped. */
+  /* Not an Integer: a genuinely async Operation, still in flight. Carry
+   * this Context's own @userdata (see Tls::Context's own comment) onto it
+   * before anything else touches it, so a caller driving its own
+   * IO::Uring event loop can recognize this completion as belonging to
+   * this connection the same way it already does for a plain one's -
+   * entirely optional (nil @userdata is simply never set, same as any
+   * other Operation whose #userdata nobody ever assigned). */
+  mrb_value userdata = mrb_iv_get(mrb, ctx->self, MRB_IVSYM(userdata));
+  if (!mrb_nil_p(userdata)) {
+    mrb_iv_set(mrb, result, MRB_IVSYM(userdata), userdata);
+  }
+  /* Mark @pending_send with the in-flight sentinel (checked above) so a
+   * retry before completion doesn't submit a second, overlapping send --
+   * the resume block overwrites this with the real Operation once
+   * reaped. */
   mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_send), mrb_symbol_value(MRB_SYM(_io_in_flight)));
   return MBEDTLS_ERR_SSL_WANT_WRITE;
 }
@@ -1262,9 +1273,14 @@ mrb_tls_bio_recv(void *p_bio, unsigned char *buf, size_t len)
     return mrb_tls_bio_recv_consume(mrb, ctx, result, buf, len);
   }
   /* Not a String and not nil: a genuinely async Operation, still in flight.
-   * Same as the send side -- mark the in-flight sentinel so a retry doesn't
-   * submit a second, overlapping recv; the resume block overwrites this
-   * with the real completion once reaped. */
+   * Same as the send side: carry @userdata onto it (see
+   * mrb_tls_bio_send()'s own comment) and mark the in-flight sentinel so a
+   * retry doesn't submit a second, overlapping recv; the resume block
+   * overwrites this with the real completion once reaped. */
+  mrb_value userdata = mrb_iv_get(mrb, ctx->self, MRB_IVSYM(userdata));
+  if (!mrb_nil_p(userdata)) {
+    mrb_iv_set(mrb, result, MRB_IVSYM(userdata), userdata);
+  }
   mrb_iv_set(mrb, ctx->self, MRB_SYM(pending_recv), mrb_symbol_value(MRB_SYM(_io_in_flight)));
   return MBEDTLS_ERR_SSL_WANT_READ;
 }

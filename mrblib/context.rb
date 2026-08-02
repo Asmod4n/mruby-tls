@@ -1,6 +1,16 @@
 module Tls
   class Context
     attr_reader :config
+    # Whatever a caller wants attached to this connection - opaque to
+    # mruby-tls itself. Set once (e.g. right after #connect_socket/
+    # #accept_socket) and mrb_tls_bio_send()/_recv() (src/mrb_tls.cpp)
+    # copy it onto every IO::Uring::Operation they submit internally
+    # through the underlying socket's own #send/#recv, so a caller
+    # driving its own IO::Uring event loop can key off op.userdata for a
+    # TLS connection's ciphertext I/O exactly the same way it already
+    # does for a plain one's - no separate tracking needed on top of
+    # whatever completion-dispatch mechanism it already has.
+    attr_accessor :userdata
     alias :recv :read
     alias :send :write
     alias :config= :configure
