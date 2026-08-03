@@ -41,12 +41,47 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
           "is deps/mbedtls initialized?"
   end
 
-  # mbedTLS 4.x's CMake build needs Python 3 + jsonschema; checked up front
-  # for a clear message instead of a mid-build traceback.
-  python3 = ENV['PYTHON3'] || 'python3'
-  unless system(python3, '-c', 'import jsonschema', :err => File::NULL)
-    raise "mruby-tls: #{python3} with the 'jsonschema' package is required to build mbedTLS 4.x " \
-          "(pip install jsonschema), or set PYTHON3 to an interpreter that has it"
+  # mbedTLS 4.x's CMake build needs Python 3 + a handful of packages
+  # (jsonschema, Jinja2, ...) for code generation - deps/mbedtls's own
+  # scripts/basic.requirements.txt is the authoritative list (it pulls in
+  # scripts/driver.requirements.txt in turn), used directly below rather
+  # than hand-copied here where it would silently drift out of date -
+  # missing a single package from it (jinja2, say) fails a `make` deep
+  # inside tf-psa-crypto's code generation with nothing pointing back at
+  # "your Python environment is incomplete".
+  #
+  # ENV['PYTHON3'] is an explicit escape hatch - set it and whatever
+  # interpreter it names is trusted as-is, requirements included, no venv
+  # involved. Otherwise, everything goes into a small venv scoped to this
+  # gem's own build directory rather than assuming (or worse, pip-
+  # installing into) whatever Python the system happens to have - many
+  # distros (openSUSE included) refuse a bare `pip install` outside a venv
+  # at all (PEP 668's "externally managed environment"), and even where
+  # it's allowed, there's no reason for a one-off build dependency to end
+  # up on the system interpreter's global site-packages.
+  #
+  # Lives outside build_dir (not under it) so bumping mbedtls_pin's own
+  # FileUtils.rm_rf(build_dir) above doesn't force recreating the venv and
+  # reinstalling every package each time the pin moves - the venv has
+  # nothing to do with which mbedTLS commit is checked out.
+  mbedtls_requirements = "#{mbedtls_dir}/scripts/basic.requirements.txt"
+  if ENV['PYTHON3']
+    python3 = ENV['PYTHON3']
+  else
+    pyenv_dir = "#{spec.build_dir}/pyenv"
+    python3 = RbConfig::CONFIG['host_os'] =~ /mswin|mingw/ ?
+      "#{pyenv_dir}/Scripts/python.exe" : "#{pyenv_dir}/bin/python3"
+    unless File.file?(python3)
+      run!('python3', '-m', 'venv', pyenv_dir)
+    end
+    unless system(python3, '-c', 'import jsonschema, jinja2', :err => File::NULL)
+      run!(python3, '-m', 'pip', 'install', '--quiet', '-r', mbedtls_requirements)
+    end
+  end
+  unless system(python3, '-c', 'import jsonschema, jinja2', :err => File::NULL)
+    raise "mruby-tls: #{python3} needs the packages listed in #{mbedtls_requirements} " \
+          "to build mbedTLS 4.x (pip install -r #{mbedtls_requirements}), " \
+          "or set PYTHON3 to an interpreter that already has them"
   end
 
   # Real MSVC only -- MinGW/Cygwin fall through to the else branch below.
@@ -90,7 +125,14 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
         '-DENABLE_PROGRAMS=OFF',
         '-DUSE_STATIC_MBEDTLS_LIBRARY=ON',
         '-DUSE_SHARED_MBEDTLS_LIBRARY=OFF',
-        '-DMBEDTLS_FATAL_WARNINGS=OFF'
+        '-DMBEDTLS_FATAL_WARNINGS=OFF',
+        # Pins CMake's own FindPython3 to the exact interpreter jsonschema
+        # was just confirmed importable on above (our venv, unless
+        # PYTHON3 overrides it) - without this, CMake resolves Python3
+        # from PATH on its own and code generation can end up running
+        # under a *different*, jsonschema-less interpreter than the one
+        # this script just checked.
+        "-DPython3_EXECUTABLE=#{python3}"
       ]
       if is_msvc
         # mruby compiles /MD; mbedTLS defaults to /MT on MSVC, which would
