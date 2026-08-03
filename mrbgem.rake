@@ -53,18 +53,31 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   is_msvc = RbConfig::CONFIG['host_os'] =~ /mswin/
 
   if is_msvc
-    libext  = '.lib'
-    libpath = "#{build_dir}/lib"
-    libtls  = "#{libpath}/mbedtls#{libext}"
-    libnames = %w[mbedtls mbedx509 mbedcrypto everest p256m]
+    libext   = '.lib'
+    libpath  = "#{build_dir}/lib"
+    prefix   = ''
   else
-    libext  = '.a'
-    libpath = "#{build_dir}/lib"
-    libtls  = "#{libpath}/libmbedtls#{libext}"
-    libnames = %w[libmbedtls libmbedx509 libmbedcrypto libeverest libp256m]
+    libext   = '.a'
+    libpath  = "#{build_dir}/lib"
+    prefix   = 'lib'
   end
+  # mbedtls/mbedx509/mbedcrypto are load-bearing -- mrb_tls.cpp links
+  # against all three directly (see the flags_before_libraries call below)
+  # and nothing here works without them. everest/p256m are optional bundled
+  # Curve25519/P-256 backends, only present for some build configurations,
+  # and never required for a link to succeed.
+  required_libnames = %w[mbedtls mbedx509 mbedcrypto]
+  optional_libnames = %w[everest p256m]
+  libnames = required_libnames + optional_libnames
+  required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
 
-  unless File.file?(libtls)
+  # All three required libs, not just one -- a build interrupted partway
+  # through (OOM, disk full, Ctrl-C) can leave libmbedtls.a sitting there
+  # without libmbedcrypto.a/libmbedx509.a ever having been produced, and
+  # checking only the first of them would treat that as "already built"
+  # forever after, silently linking short every time - a mystifying wall of
+  # "undefined reference" from mrb_tls.cpp instead of a rebuild.
+  unless required_libpaths.all? { |p| File.file?(p) }
     FileUtils.mkdir_p(build_dir)
     Dir.chdir(build_dir) do
       cmake_args = [
@@ -97,6 +110,25 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
         run!('make', 'install')
       end
     end
+
+    # cmake/make/make install can all exit 0 (nothing above raises) and
+    # still not have produced every required library - e.g. a dependency
+    # CMake silently skips a subdirectory on a `find_package` miss, or
+    # `make` genuinely finished building everything it was asked to but a
+    # prior partial build's now-stale object files short-circuited part of
+    # the dependency graph. Either way, catch it *here*, loudly, with the
+    # exact missing path named - not as a wall of "undefined reference to
+    # mbedtls_ssl_*" out of the final mrbtest/mruby link, several build
+    # steps and zero useful context later.
+    missing = required_libpaths.reject { |p| File.file?(p) }
+    unless missing.empty?
+      raise "mruby-tls: mbedTLS build finished without producing:\n" \
+            "#{missing.map { |p| "  #{p}" }.join("\n")}\n" \
+            "cmake/make reported success above, so this is a partial/interrupted build " \
+            "(OOM, disk full, a skipped CMake subdirectory, ...), not a compile error - " \
+            "delete #{build_dir} and rebuild with more memory/disk, or re-run cmake by " \
+            "hand from #{build_dir} to see what it actually configured."
+    end
   end
 
   [spec.cc, spec.cxx].each do |cmd|
@@ -105,10 +137,13 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
 
   # mbedTLS splits into three static libraries; mbedtls depends on mbedx509
   # which depends on mbedcrypto, so they have to be listed in that order.
-  # libeverest/libp256m are the optional bundled Curve25519/P-256 backends and
-  # are only present (and only referenced) for some build configurations.
+  # everest/p256m are the optional bundled Curve25519/P-256 backends and are
+  # only present (and only referenced) for some build configurations - the
+  # `select` here is fine for those precisely because they're optional;
+  # mbedtls/mbedx509/mbedcrypto themselves are already guaranteed present
+  # by the check above, every time, not just on a from-scratch build.
   spec.linker.flags_before_libraries += libnames.map { |n|
-    "#{libpath}/#{n}#{libext}"
+    "#{libpath}/#{prefix}#{n}#{libext}"
   }.select { |p| File.file?(p) }
 
   if is_msvc
