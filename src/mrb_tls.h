@@ -147,6 +147,14 @@ typedef struct mrb_tls_ctx {
    * which is a real GC root -- see mrb_tls_bio_send/recv). */
   mrb_state *mrb;
   mrb_value self;
+
+  /* Non-NULL only for a connection created by mrb_tls_accept_memory()
+   * (mruby/tls.h): instead of the BIO callbacks reading and writing a
+   * socket, ciphertext is handed in and taken back out by the caller, so
+   * whoever owns the I/O can drive a handshake from their own event loop
+   * without this gem ever touching a descriptor. Opaque here - the
+   * definition lives in mrb_tls.cpp with the callbacks that use it. */
+  struct mrb_tls_membio *mem;
 } mrb_tls_ctx_t;
 
 void mrb_tls_config_destroy(mrb_state *mrb, mrb_tls_config_t *cfg);

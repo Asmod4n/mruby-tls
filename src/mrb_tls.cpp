@@ -1393,10 +1393,11 @@ mrb_tls_ctx_close_fd(mrb_tls_ctx_t *ctx)
   ctx->own_fd = 0;
 }
 
+void mrb_tls_membio_free(mrb_state *mrb, struct mrb_tls_membio *m);
+
 void
 mrb_tls_ctx_destroy(mrb_state *mrb, mrb_tls_ctx_t *ctx)
 {
-  (void)mrb;
   mbedtls_ssl_free(&ctx->ssl);
   mbedtls_ssl_config_free(&ctx->conf);
   mbedtls_x509_crt_free(&ctx->ca);
@@ -1407,6 +1408,9 @@ mrb_tls_ctx_destroy(mrb_state *mrb, mrb_tls_ctx_t *ctx)
    * them once this DATA object (and therefore its ivar table) becomes
    * unreachable, same as it already does for @config. */
   mrb_tls_ctx_close_fd(ctx);
+  /* NULL for every socket-backed connection; only mrb_tls_accept_memory()
+   * ever allocates one. */
+  mrb_tls_membio_free(mrb, ctx->mem);
   memset(ctx, 0, sizeof(*ctx));
 }
 
@@ -2576,6 +2580,231 @@ mrb_tls_conn_cipher(mrb_state *mrb, mrb_value self)
   }
 
   return mrb_str_new_cstr(mrb, cipher);
+}
+
+
+/* ------------------------------------------------------------------------ */
+/* Memory BIO: TLS for a caller that owns its own I/O                        */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * Everything above drives mbedTLS through a socket -- either a descriptor
+ * this gem owns (#connect) or a Ruby socket object's own #recv/#send
+ * (mrb_tls_bio_send/_recv). Neither shape fits a caller whose I/O is
+ * already asynchronous and whose "socket" may not be a process-level
+ * descriptor at all: an io_uring adapter, for instance, reads into
+ * kernel-provided buffers against registered descriptors that exist only
+ * inside its ring.
+ *
+ * So: the same handshake, with the transport removed. The caller pushes
+ * ciphertext in as it arrives, pulls whatever ciphertext mbedTLS produced
+ * back out and writes it however it likes, and drives handshake/read/write
+ * with plain want-more semantics. Nothing here touches a descriptor.
+ *
+ * Buffers grow on demand and the inbound one rewinds once fully consumed,
+ * so a long-lived connection settles at roughly one TLS record each rather
+ * than growing without bound.
+ */
+typedef struct mrb_tls_membio {
+  unsigned char *in;
+  size_t in_len, in_cap, in_off;
+  unsigned char *out;
+  size_t out_len, out_cap;
+} mrb_tls_membio_t;
+
+static int
+mrb_tls_mem_reserve(mrb_state *mrb, unsigned char **buf, size_t *cap, size_t need)
+{
+  if (need <= *cap) return 0;
+  size_t want = *cap ? *cap * 2 : 4096;
+  if (want < need) want = need;
+  unsigned char *grown = (unsigned char *)mrb_realloc_simple(mrb, *buf, want);
+  if (grown == NULL) return -1;
+  *buf = grown;
+  *cap = want;
+  return 0;
+}
+
+/* mbedTLS wants more ciphertext than the caller has handed over yet. */
+static int
+mrb_tls_mem_bio_recv(void *p_bio, unsigned char *buf, size_t len)
+{
+  mrb_tls_ctx_t *ctx = (mrb_tls_ctx_t *)p_bio;
+  mrb_tls_membio_t *m = ctx->mem;
+  size_t avail = m->in_len - m->in_off;
+
+  if (avail == 0) return MBEDTLS_ERR_SSL_WANT_READ;
+  if (len > avail) len = avail;
+  memcpy(buf, m->in + m->in_off, len);
+  m->in_off += len;
+  if (m->in_off == m->in_len) m->in_off = m->in_len = 0;
+  return (int)len;
+}
+
+/* Always accepts: the caller decides when this actually reaches the wire,
+ * so there is no such thing as "would block" on this side. */
+static int
+mrb_tls_mem_bio_send(void *p_bio, const unsigned char *buf, size_t len)
+{
+  mrb_tls_ctx_t *ctx = (mrb_tls_ctx_t *)p_bio;
+  mrb_tls_membio_t *m = ctx->mem;
+
+  if (mrb_tls_mem_reserve(ctx->mrb, &m->out, &m->out_cap, m->out_len + len) != 0) {
+    return MBEDTLS_ERR_SSL_ALLOC_FAILED;
+  }
+  memcpy(m->out + m->out_len, buf, len);
+  m->out_len += len;
+  return (int)len;
+}
+
+void
+mrb_tls_membio_free(mrb_state *mrb, struct mrb_tls_membio *m)
+{
+  if (m == NULL) return;
+  mrb_free(mrb, m->in);
+  mrb_free(mrb, m->out);
+  mrb_free(mrb, m);
+}
+
+/* Maps mbedTLS's return into the three answers a caller actually acts on:
+ * 1 made progress / done, 0 needs more ciphertext, -1 finished or failed. */
+static int
+mrb_tls_mem_classify(int ret)
+{
+  if (ret >= 0) return 1;
+  if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) return 0;
+  return -1;
+}
+
+static mrb_tls_ctx_t *
+mrb_tls_mem_ctx(mrb_state *mrb, mrb_value conn)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_ctx_ptr(mrb, conn);
+  if (ctx->mem == NULL) {
+    errno = 0;
+    mrb_tls_fail(mrb, 0, "not a memory-BIO TLS connection");
+  }
+  return ctx;
+}
+
+MRB_API mrb_value
+mrb_tls_accept_memory(mrb_state *mrb, mrb_value server)
+{
+  mrb_tls_ctx_t *sctx = mrb_tls_ctx_ptr(mrb, server);
+  if (sctx->endpoint != MBEDTLS_SSL_IS_SERVER) {
+    errno = 0;
+    mrb_tls_fail(mrb, 0, "not a server context");
+  }
+
+  struct RData *client_data = mrb_data_object_alloc(mrb,
+      mrb_class_get_under_id(mrb, mrb_module_get_id(mrb, MRB_SYM(Tls)), MRB_SYM(Client)),
+      NULL, &tls_type);
+  mrb_value client = mrb_obj_value(client_data);
+
+  mrb_tls_ctx_t *cctx = mrb_tls_ctx_new(mrb, client);
+  cctx->endpoint = MBEDTLS_SSL_IS_SERVER;
+  cctx->cfg = sctx->cfg;
+  /* No descriptor at either end - the whole point. */
+  cctx->fd_read = -1;
+  cctx->fd_write = -1;
+  cctx->own_fd = 0;
+
+  cctx->mem = (mrb_tls_membio_t *)mrb_calloc(mrb, 1, sizeof(mrb_tls_membio_t));
+
+  /* Same borrowing as mrb_tls_accept_socket(): the accepted connection
+   * shares the server's Config (and its SNI block, which mrb_tls_sni_cb()
+   * reads off the connection rather than the server). */
+  mrb_iv_set(mrb, client, MRB_SYM(cfg), mrb_iv_get(mrb, server, MRB_SYM(cfg)));
+  mrb_iv_set(mrb, client, MRB_SYM(sni), mrb_iv_get(mrb, server, MRB_SYM(sni)));
+
+  mrb_tls_ctx_setup(mrb, client, cctx);
+  /* ctx_setup installs the socket-dispatching BIO; replace it. Done after
+   * rather than inside so the socket path stays exactly as it was. */
+  mbedtls_ssl_set_bio(&cctx->ssl, cctx, mrb_tls_mem_bio_send, mrb_tls_mem_bio_recv, NULL);
+
+  return client;
+}
+
+MRB_API int
+mrb_tls_feed(mrb_state *mrb, mrb_value conn, const void *buf, size_t len)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  mrb_tls_membio_t *m = ctx->mem;
+
+  /* Compact away anything already consumed before growing. */
+  if (m->in_off > 0) {
+    memmove(m->in, m->in + m->in_off, m->in_len - m->in_off);
+    m->in_len -= m->in_off;
+    m->in_off = 0;
+  }
+  if (mrb_tls_mem_reserve(mrb, &m->in, &m->in_cap, m->in_len + len) != 0) return -1;
+  memcpy(m->in + m->in_len, buf, len);
+  m->in_len += len;
+  return 0;
+}
+
+MRB_API size_t
+mrb_tls_pending(mrb_state *mrb, mrb_value conn, const unsigned char **buf)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  if (buf != NULL) *buf = ctx->mem->out;
+  return ctx->mem->out_len;
+}
+
+MRB_API void
+mrb_tls_drain(mrb_state *mrb, mrb_value conn, size_t len)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  mrb_tls_membio_t *m = ctx->mem;
+
+  if (len >= m->out_len) {
+    m->out_len = 0;
+    return;
+  }
+  memmove(m->out, m->out + len, m->out_len - len);
+  m->out_len -= len;
+}
+
+MRB_API int
+mrb_tls_handshake_memory(mrb_state *mrb, mrb_value conn)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  if (ctx->handshaked) return 1;
+
+  int ret = mbedtls_ssl_handshake(&ctx->ssl);
+  int state = mrb_tls_mem_classify(ret);
+  if (state == 1) ctx->handshaked = 1;
+  return state;
+}
+
+MRB_API int
+mrb_tls_read_memory(mrb_state *mrb, mrb_value conn, void *buf, size_t len)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  int ret = mbedtls_ssl_read(&ctx->ssl, (unsigned char *)buf, len);
+
+  if (ret > 0) return ret;
+  /* A clean close_notify is the end of the stream, not an error, but it is
+   * still "no more plaintext ever" - the caller must not keep waiting. */
+  if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return -1;
+  return mrb_tls_mem_classify(ret) == 0 ? 0 : -1;
+}
+
+MRB_API int
+mrb_tls_write_memory(mrb_state *mrb, mrb_value conn, const void *buf, size_t len)
+{
+  mrb_tls_ctx_t *ctx = mrb_tls_mem_ctx(mrb, conn);
+  size_t off = 0;
+
+  /* mbedtls_ssl_write() writes at most one record per call; the memory BIO
+   * never refuses, so looping here can only be cut short by a real error. */
+  while (off < len) {
+    int ret = mbedtls_ssl_write(&ctx->ssl, (const unsigned char *)buf + off, len - off);
+    if (ret > 0) { off += (size_t)ret; continue; }
+    if (mrb_tls_mem_classify(ret) == 0) break;
+    return -1;
+  }
+  return (int)off;
 }
 
 /* ------------------------------------------------------------------------ */

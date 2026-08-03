@@ -177,6 +177,35 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
     cmd.include_paths << "#{build_dir}/include"
   end
 
+  # Expose mbedTLS's own headers to dependent gems, the same way
+  # mruby-io-uring exposes liburing's and mruby-wslay exposes wslay's:
+  # the include_paths just above only ever reach *this* gem's own
+  # compilation, but every mrbgem's include/ directory is on every other
+  # gem's search path unconditionally. Copying them there is what lets a
+  # dependent gem call mbedtls_*/psa_* directly from its own C/C++ - an
+  # adapter terminating TLS inside its own event loop, say, driving the
+  # handshake through a memory BIO instead of this gem's Ruby API.
+  #
+  # Taken from the install prefix rather than deps/mbedtls's source tree
+  # because mbedTLS 4.x generates a good part of its public headers at
+  # build time (tf-psa-crypto's especially); only what `make install`
+  # actually put there is the real, configured set. Copied rather than
+  # symlinked so what lands here is a snapshot of this build.
+  #
+  # Only the three header trees: the same prefix also holds CMake's own
+  # leftovers (CMakeFiles/, Makefile, cmake_install.cmake), which are not
+  # headers and have no business on anyone's include path.
+  #
+  # Build output, regenerated every build - not tracked source, and this
+  # gem's own public header (include/mruby/tls.h) stays tracked. See
+  # .gitignore.
+  exposed_include = "#{spec.dir}/include"
+  FileUtils.mkdir_p(exposed_include)
+  %w[mbedtls psa tf-psa-crypto].each do |header_dir|
+    src = "#{build_dir}/include/#{header_dir}"
+    FileUtils.cp_r(src, exposed_include) if File.directory?(src)
+  end
+
   # mbedTLS splits into three static libraries; mbedtls depends on mbedx509
   # which depends on mbedcrypto, so they have to be listed in that order.
   # everest/p256m are the optional bundled Curve25519/P-256 backends and are

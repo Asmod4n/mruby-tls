@@ -37,3 +37,11 @@ build_config.rb.lock
 compile_commands.json
 /mruby/
 /.vscode/
+
+# Copied at build time by mrbgem.rake out of mbedTLS's own install
+# prefix (see its comment there) so dependent gems can #include
+# <mbedtls/...> / <psa/...> - build output, not tracked source. This
+# gem's own public header, include/mruby/tls.h, stays tracked.
+/include/mbedtls/
+/include/psa/
+/include/tf-psa-crypto/
