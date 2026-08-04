@@ -89,11 +89,9 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
 
   if is_msvc
     libext   = '.lib'
-    libpath  = "#{build_dir}/lib"
     prefix   = ''
   else
     libext   = '.a'
-    libpath  = "#{build_dir}/lib"
     prefix   = 'lib'
   end
   # mbedtls/mbedx509/mbedcrypto are load-bearing -- mrb_tls.cpp links
@@ -104,6 +102,25 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   required_libnames = %w[mbedtls mbedx509 mbedcrypto]
   optional_libnames = %w[everest p256m]
   libnames = required_libnames + optional_libnames
+
+  # lib or lib64: CMake's GNUInstallDirs picks lib64 on 64-bit
+  # openSUSE/Fedora/RHEL and lib on Debian/Ubuntu, so hardcoding either
+  # one builds fine on half the distros and then reports the libraries
+  # "missing" on the other half - with cmake and make having both exited
+  # 0, which sends you looking for an OOM that never happened.
+  #
+  # The cmake invocation below now pins CMAKE_INSTALL_LIBDIR=lib so fresh
+  # builds land in the same place everywhere. This lookup stays anyway,
+  # because a tree built before that pin still has everything under
+  # lib64, and declaring a perfectly good build missing is exactly the
+  # failure being fixed.
+  resolve_libdir = lambda do
+    found = %w[lib lib64].find do |d|
+      required_libnames.all? { |n| File.file?("#{build_dir}/#{d}/#{prefix}#{n}#{libext}") }
+    end
+    found || 'lib'
+  end
+  libpath = "#{build_dir}/#{resolve_libdir.call}"
   required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
 
   # All three required libs, not just one -- a build interrupted partway
@@ -118,6 +135,10 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
       cmake_args = [
         mbedtls_dir,
         "-DCMAKE_INSTALL_PREFIX=#{build_dir}",
+        # Without this GNUInstallDirs installs to lib64 on 64-bit
+        # openSUSE/Fedora/RHEL and to lib on Debian/Ubuntu. Pin it so
+        # every distro puts the archives in the same place.
+        '-DCMAKE_INSTALL_LIBDIR=lib',
         '-DCMAKE_BUILD_TYPE=Release',
         '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
         # Test suites/sample programs need the "framework" submodule; skip.
@@ -162,6 +183,15 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
     # exact missing path named - not as a wall of "undefined reference to
     # mbedtls_ssl_*" out of the final mrbtest/mruby link, several build
     # steps and zero useful context later.
+    # Re-resolve lib vs lib64 now that the install has actually run: the
+    # pin above should have settled it, but a CMake that ignores
+    # CMAKE_INSTALL_LIBDIR would otherwise be reported as a failed build
+    # when what really happened is that everything succeeded one
+    # directory over. libpath feeds the linker flags further down too, so
+    # this has to update it rather than just the check.
+    libpath = "#{build_dir}/#{resolve_libdir.call}"
+    required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
+
     missing = required_libpaths.reject { |p| File.file?(p) }
     unless missing.empty?
       raise "mruby-tls: mbedTLS build finished without producing:\n" \
@@ -169,7 +199,8 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
             "cmake/make reported success above, so this is a partial/interrupted build " \
             "(OOM, disk full, a skipped CMake subdirectory, ...), not a compile error - " \
             "delete #{build_dir} and rebuild with more memory/disk, or re-run cmake by " \
-            "hand from #{build_dir} to see what it actually configured."
+            "hand from #{build_dir} to see what it actually configured.\n" \
+            "Directories checked: #{%w[lib lib64].map { |d| "#{build_dir}/#{d}" }.join(', ')}"
     end
   end
 
