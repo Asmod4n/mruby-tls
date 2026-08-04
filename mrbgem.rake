@@ -103,24 +103,34 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   optional_libnames = %w[everest p256m]
   libnames = required_libnames + optional_libnames
 
-  # lib or lib64: CMake's GNUInstallDirs picks lib64 on 64-bit
-  # openSUSE/Fedora/RHEL and lib on Debian/Ubuntu, so hardcoding either
-  # one builds fine on half the distros and then reports the libraries
-  # "missing" on the other half - with cmake and make having both exited
-  # 0, which sends you looking for an OOM that never happened.
+  # Where the archives land is CMake's decision, so ask CMake instead of
+  # guessing: GNUInstallDirs picks lib64 on 64-bit openSUSE/Fedora/RHEL
+  # and lib on Debian/Ubuntu, and it records what it chose in the build
+  # tree's CMakeCache.txt as CMAKE_INSTALL_LIBDIR. Hardcoding either name
+  # builds fine on half the distros and then reports a perfectly good
+  # build's libraries "missing" on the other half - with cmake and make
+  # both having exited 0, which sends you hunting an OOM that never
+  # happened.
   #
-  # The cmake invocation below now pins CMAKE_INSTALL_LIBDIR=lib so fresh
-  # builds land in the same place everywhere. This lookup stays anyway,
-  # because a tree built before that pin still has everything under
-  # lib64, and declaring a perfectly good build missing is exactly the
-  # failure being fixed.
-  resolve_libdir = lambda do
-    found = %w[lib lib64].find do |d|
-      required_libnames.all? { |n| File.file?("#{build_dir}/#{d}/#{prefix}#{n}#{libext}") }
+  # The invocation below pins CMAKE_INSTALL_LIBDIR=lib so fresh builds
+  # agree everywhere, but a tree configured before that pin still says
+  # what it actually did, and this reads that rather than assuming it.
+  #
+  # No cache means nothing has been configured yet, so nothing is built
+  # either - any answer works there, since it only has to fail the
+  # existence check below and trigger the build.
+  resolve_libpath = lambda do
+    cache = "#{build_dir}/CMakeCache.txt"
+    dir = 'lib'
+    if File.file?(cache)
+      line = File.foreach(cache).find { |l| l.start_with?('CMAKE_INSTALL_LIBDIR:') }
+      dir = line.split('=', 2).last.strip if line
     end
-    found || 'lib'
+    # CMAKE_INSTALL_LIBDIR is normally relative to the install prefix,
+    # but it is allowed to be absolute.
+    dir =~ %r{\A(/|[A-Za-z]:[\\/])} ? dir : "#{build_dir}/#{dir}"
   end
-  libpath = "#{build_dir}/#{resolve_libdir.call}"
+  libpath = resolve_libpath.call
   required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
 
   # All three required libs, not just one -- a build interrupted partway
@@ -183,13 +193,11 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
     # exact missing path named - not as a wall of "undefined reference to
     # mbedtls_ssl_*" out of the final mrbtest/mruby link, several build
     # steps and zero useful context later.
-    # Re-resolve lib vs lib64 now that the install has actually run: the
-    # pin above should have settled it, but a CMake that ignores
-    # CMAKE_INSTALL_LIBDIR would otherwise be reported as a failed build
-    # when what really happened is that everything succeeded one
-    # directory over. libpath feeds the linker flags further down too, so
-    # this has to update it rather than just the check.
-    libpath = "#{build_dir}/#{resolve_libdir.call}"
+    # Ask again now that cmake has actually configured: before this ran
+    # there was no cache to read, so the paths above were a placeholder.
+    # libpath feeds the linker flags further down as well as the check
+    # below, so this updates it rather than just the check.
+    libpath = resolve_libpath.call
     required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
 
     missing = required_libpaths.reject { |p| File.file?(p) }
@@ -200,7 +208,7 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
             "(OOM, disk full, a skipped CMake subdirectory, ...), not a compile error - " \
             "delete #{build_dir} and rebuild with more memory/disk, or re-run cmake by " \
             "hand from #{build_dir} to see what it actually configured.\n" \
-            "Directories checked: #{%w[lib lib64].map { |d| "#{build_dir}/#{d}" }.join(', ')}"
+            "(CMAKE_INSTALL_LIBDIR in #{build_dir}/CMakeCache.txt puts them in #{libpath}.)"
     end
   end
 
