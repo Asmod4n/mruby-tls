@@ -173,53 +173,6 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
           # this script just checked.
           "-DPython3_EXECUTABLE=#{python3}"
         ]
-
-        # AES-NI needs machine flags on *mbedTLS's own* compilation, not on
-        # ours - by the time this gem's sources compile, the decision has
-        # already been baked into libtfpsacrypto.
-        #
-        # tf-psa-crypto/drivers/builtin/src/aesni.h:38 only defines
-        # MBEDTLS_AESNI_HAVE_INTRINSICS when __AES__ and __PCLMUL__ are
-        # set, and gcc/clang define those only when given -maes/-mpclmul.
-        # Without them the intrinsics path is out, and with it goes gcm.c's
-        # CLMUL GHASH (gcm.c:66,351) - GCM is AES-CTR *plus* GHASH, so a
-        # software GHASH caps the whole cipher no matter how the AES half
-        # is dispatched. Measured on a Zen with aes+pclmulqdq+vaes:
-        # 0.31 GB/s flat from 1 KiB to 64 KiB, against 5.49 GB/s from
-        # openssl on the same cpu.
-        #
-        # These exact three are what crypto_config.h's own MBEDTLS_AESNI_C
-        # note prescribes. Not -march=native: that bakes the build
-        # machine's full ISA into the artifact and SIGILLs if it ever moves,
-        # while these enable precisely the extensions the intrinsics need.
-        # Selection stays runtime-guarded by mbedtls_aesni_has_support(),
-        # so a cpu without AES-NI still runs, just on the software path.
-        # MRUBY_TLS_MARCH overrides for anyone who wants -march=native and
-        # accepts what that means.
-        unless is_msvc
-          march = ENV['MRUBY_TLS_MARCH']
-          if march && !march.empty?
-            cmake_args << "-DCMAKE_C_FLAGS=#{march}"
-          elsif RbConfig::CONFIG['host_cpu'] =~ /\A(x86_64|amd64|i[3-6]86)\z/
-            # Ask the compiler rather than assume: a cross-compiler, or a
-            # clang too old for one of these, must not turn a working build
-            # into a configure failure.
-            cc = ENV['CC'] || RbConfig::CONFIG['CC'] || 'cc'
-            flags = '-maes -mpclmul -msse2'
-            probe = "#{build_dir}/.aesni_probe.c"
-            FileUtils.mkdir_p(build_dir)
-            File.write(probe, "#include <wmmintrin.h>\nint main(void){return 0;}\n")
-            ok = system("#{cc} #{flags} -c #{probe} -o #{probe}.o",
-                        out: File::NULL, err: File::NULL)
-            FileUtils.rm_f([probe, "#{probe}.o"])
-            if ok
-              cmake_args << "-DCMAKE_C_FLAGS=#{flags}"
-            else
-              warn "mruby-tls: #{cc} rejected #{flags}; mbedTLS will use software AES " \
-                   "(about 17x slower for AES-GCM). Set MRUBY_TLS_MARCH to override."
-            end
-          end
-        end
         if is_msvc
           # mruby compiles /MD; mbedTLS defaults to /MT on MSVC, which would
           # LNK2038-mismatch. CMP0091=NEW is needed for the runtime-library
@@ -271,45 +224,39 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   # Take cflags and ldflags from mbedTLS's own pkg-config files rather than
   # reconstructing them here. CMake writes .pc files describing exactly what
   # it built and where it put it, so this stops being our guess about
-  # lib-vs-lib64, archive naming, and which libraries exist in this
-  # configuration.
+  # lib-vs-lib64, archive naming, and which libraries a given configuration
+  # actually produced.
   #
-  # Both directories, because they differ: the installed set lands in
-  # ${CMAKE_INSTALL_LIBDIR}/pkgconfig and is complete, while the build-tree
-  # copy is missing mbedcrypto.pc (tf-psa-crypto configures its own in a
-  # subdirectory). Installed first so it wins.
+  # Both pkgconfig directories, because they differ: the installed set under
+  # CMAKE_INSTALL_LIBDIR is complete, while the build-tree copy is missing
+  # mbedcrypto.pc - tf-psa-crypto configures its own in a subdirectory.
+  # Installed first so it wins.
   #
-  # Order matters and is dependency order: these are static archives, so
-  # mbedtls must precede mbedx509 must precede mbedcrypto. search_package
-  # appends to flags_before_libraries, and it does not pass --static, so
-  # Requires.private is not expanded for us - naming each one is what
-  # supplies the full set. In 4.x mbedcrypto.pc resolves to -ltfpsacrypto,
-  # which is where the crypto core actually lives now.
-  # Guarded, because libpath/libnames are assigned inside the `unless
-  # cleaning` block above and are nil on a clean run - libnames.map would
-  # raise NoMethodError before rake got as far as deleting anything. A
-  # clean needs no compiler or linker flags in the first place.
+  # Named individually and in dependency order, because these are static
+  # archives and search_package does not pass --static, so Requires.private
+  # is never expanded for us. mbedtls, mbedx509, mbedcrypto resolves to
+  # -lmbedtls -lmbedx509 -ltfpsacrypto, which is exactly the chain
+  # MbedTLSTargets.cmake declares - there is no mbedcrypto target in 4.x at
+  # all, and mbedcrypto.pc is a compatibility alias for tfpsacrypto.
+  #
+  # Guarded on `cleaning` because libpath/libnames are assigned inside the
+  # block above and are nil on a clean run - libnames.map would raise
+  # NoMethodError before rake deleted anything. A clean needs no flags.
   unless cleaning
     pkgconfig_dirs = ["#{libpath}/pkgconfig", "#{build_dir}/pkgconfig"].select { |d| File.directory?(d) }
     found_via_pkgconfig = false
     unless pkgconfig_dirs.empty?
-      ENV['PKG_CONFIG_PATH'] = (pkgconfig_dirs + [ENV['PKG_CONFIG_PATH']]).compact.reject(&:empty?).join(File::PATH_SEPARATOR)
+      ENV['PKG_CONFIG_PATH'] =
+        (pkgconfig_dirs + [ENV['PKG_CONFIG_PATH']]).compact.reject(&:empty?).join(File::PATH_SEPARATOR)
       found_via_pkgconfig = %w[mbedtls mbedx509 mbedcrypto].map { |pkg| spec.search_package(pkg) }.all?
     end
 
     unless found_via_pkgconfig
-      # No pkg-config on this host (MSVC especially), or a build predating the
-      # .pc files. Fall back to what this gem did before: the include tree and
-      # the archive paths straight off CMake's answer for CMAKE_INSTALL_LIBDIR.
+      # No pkg-config on this host (MSVC especially), or a build predating
+      # the .pc files. What this gem did before.
       [spec.cc, spec.cxx].each do |cmd|
         cmd.include_paths << "#{build_dir}/include"
       end
-      # everest/p256m are optional bundled Curve25519/P-256 backends, present
-      # only for some configurations, so `select` is right for them - the
-      # three required ones are already guaranteed by the check above.
-      spec.linker.flags_before_libraries += libnames.map { |n|
-        "#{libpath}/#{prefix}#{n}#{libext}"
-      }.select { |p| File.file?(p) }
     end
   end
 
@@ -342,6 +289,20 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
       src = "#{build_dir}/include/#{header_dir}"
       FileUtils.cp_r(src, exposed_include) if File.directory?(src)
     end
+  end
+
+  # mbedTLS splits into three static libraries; mbedtls depends on mbedx509
+  # which depends on mbedcrypto, so they have to be listed in that order.
+  # everest/p256m are the optional bundled Curve25519/P-256 backends and are
+  # only present (and only referenced) for some build configurations - the
+  # `select` here is fine for those precisely because they're optional;
+  # mbedtls/mbedx509/mbedcrypto themselves are already guaranteed present
+  # by the check above, every time, not just on a from-scratch build.
+  # Only when pkg-config did not already supply them (see above).
+  if !cleaning && !found_via_pkgconfig
+    spec.linker.flags_before_libraries += libnames.map { |n|
+      "#{libpath}/#{prefix}#{n}#{libext}"
+    }.select { |p| File.file?(p) }
   end
 
   if is_msvc
