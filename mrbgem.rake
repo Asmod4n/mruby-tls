@@ -7,6 +7,13 @@ def run!(*args)
   system(*args) or raise "command failed: #{args.join(' ')}"
 end
 
+# Rake loads every mrbgem.rake to build its task graph, whatever task was
+# asked for - so the work below used to run for `rake clean` and
+# `deep_clean` too: a git submodule fetch and a full cmake build of
+# mbedTLS, immediately before deleting the result. Skip it when the point
+# of the run is to remove things.
+cleaning = Rake.application.top_level_tasks.any? { |t| t =~ /\Aclean|deep_clean\z/ }
+
 MRuby::Gem::Specification.new('mruby-tls') do |spec|
   spec.license = 'Apache-2'
   spec.author  = 'Hendrik Beskow'
@@ -18,197 +25,199 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   mbedtls_dir = "#{spec.dir}/deps/mbedtls"
   mbedtls_pin = 'aff01855637364760efdeb02c5674b6fedbb0e0f' # mbedtls-4.1 branch tip as of this pin
 
-  # Runs from the superproject root first: on a fresh clone (no
-  # --recurse-submodules) deps/mbedtls has no .git of its own yet, and
-  # `git rev-parse HEAD` inside it would resolve through the superproject.
-  Dir.chdir(spec.dir) do
-    run!('git', 'submodule', 'update', '--init', '--recursive', '--', 'deps/mbedtls')
-  end
-
-  # Re-verified on every build (not just when CMakeLists.txt is missing) so
-  # bumping mbedtls_pin can't become a silent no-op on an already-built tree.
-  mbedtls_pin_ok = Dir.chdir(mbedtls_dir) { `git rev-parse HEAD`.strip == mbedtls_pin }
-  unless mbedtls_pin_ok
-    Dir.chdir(mbedtls_dir) do
-      run!('git', 'checkout', mbedtls_pin)
-      run!('git', 'submodule', 'update', '--init', '--recursive')
+  unless cleaning
+    # Runs from the superproject root first: on a fresh clone (no
+    # --recurse-submodules) deps/mbedtls has no .git of its own yet, and
+    # `git rev-parse HEAD` inside it would resolve through the superproject.
+    Dir.chdir(spec.dir) do
+      run!('git', 'submodule', 'update', '--init', '--recursive', '--', 'deps/mbedtls')
     end
-    FileUtils.rm_rf(build_dir)
-  end
 
-  unless File.file?("#{mbedtls_dir}/CMakeLists.txt")
-    raise "mruby-tls: #{mbedtls_dir}/CMakeLists.txt missing after submodule update -- " \
-          "is deps/mbedtls initialized?"
-  end
+    # Re-verified on every build (not just when CMakeLists.txt is missing) so
+    # bumping mbedtls_pin can't become a silent no-op on an already-built tree.
+    mbedtls_pin_ok = Dir.chdir(mbedtls_dir) { `git rev-parse HEAD`.strip == mbedtls_pin }
+    unless mbedtls_pin_ok
+      Dir.chdir(mbedtls_dir) do
+        run!('git', 'checkout', mbedtls_pin)
+        run!('git', 'submodule', 'update', '--init', '--recursive')
+      end
+      FileUtils.rm_rf(build_dir)
+    end
 
-  # mbedTLS 4.x's CMake build needs Python 3 + a handful of packages
-  # (jsonschema, Jinja2, ...) for code generation - deps/mbedtls's own
-  # scripts/basic.requirements.txt is the authoritative list (it pulls in
-  # scripts/driver.requirements.txt in turn), used directly below rather
-  # than hand-copied here where it would silently drift out of date -
-  # missing a single package from it (jinja2, say) fails a `make` deep
-  # inside tf-psa-crypto's code generation with nothing pointing back at
-  # "your Python environment is incomplete".
-  #
-  # ENV['PYTHON3'] is an explicit escape hatch - set it and whatever
-  # interpreter it names is trusted as-is, requirements included, no venv
-  # involved. Otherwise, everything goes into a small venv scoped to this
-  # gem's own build directory rather than assuming (or worse, pip-
-  # installing into) whatever Python the system happens to have - many
-  # distros (openSUSE included) refuse a bare `pip install` outside a venv
-  # at all (PEP 668's "externally managed environment"), and even where
-  # it's allowed, there's no reason for a one-off build dependency to end
-  # up on the system interpreter's global site-packages.
-  #
-  # Lives outside build_dir (not under it) so bumping mbedtls_pin's own
-  # FileUtils.rm_rf(build_dir) above doesn't force recreating the venv and
-  # reinstalling every package each time the pin moves - the venv has
-  # nothing to do with which mbedTLS commit is checked out.
-  mbedtls_requirements = "#{mbedtls_dir}/scripts/basic.requirements.txt"
-  if ENV['PYTHON3']
-    python3 = ENV['PYTHON3']
-  else
-    pyenv_dir = "#{spec.build_dir}/pyenv"
-    python3 = RbConfig::CONFIG['host_os'] =~ /mswin|mingw/ ?
-      "#{pyenv_dir}/Scripts/python.exe" : "#{pyenv_dir}/bin/python3"
-    unless File.file?(python3)
-      run!('python3', '-m', 'venv', pyenv_dir)
+    unless File.file?("#{mbedtls_dir}/CMakeLists.txt")
+      raise "mruby-tls: #{mbedtls_dir}/CMakeLists.txt missing after submodule update -- " \
+            "is deps/mbedtls initialized?"
+    end
+
+    # mbedTLS 4.x's CMake build needs Python 3 + a handful of packages
+    # (jsonschema, Jinja2, ...) for code generation - deps/mbedtls's own
+    # scripts/basic.requirements.txt is the authoritative list (it pulls in
+    # scripts/driver.requirements.txt in turn), used directly below rather
+    # than hand-copied here where it would silently drift out of date -
+    # missing a single package from it (jinja2, say) fails a `make` deep
+    # inside tf-psa-crypto's code generation with nothing pointing back at
+    # "your Python environment is incomplete".
+    #
+    # ENV['PYTHON3'] is an explicit escape hatch - set it and whatever
+    # interpreter it names is trusted as-is, requirements included, no venv
+    # involved. Otherwise, everything goes into a small venv scoped to this
+    # gem's own build directory rather than assuming (or worse, pip-
+    # installing into) whatever Python the system happens to have - many
+    # distros (openSUSE included) refuse a bare `pip install` outside a venv
+    # at all (PEP 668's "externally managed environment"), and even where
+    # it's allowed, there's no reason for a one-off build dependency to end
+    # up on the system interpreter's global site-packages.
+    #
+    # Lives outside build_dir (not under it) so bumping mbedtls_pin's own
+    # FileUtils.rm_rf(build_dir) above doesn't force recreating the venv and
+    # reinstalling every package each time the pin moves - the venv has
+    # nothing to do with which mbedTLS commit is checked out.
+    mbedtls_requirements = "#{mbedtls_dir}/scripts/basic.requirements.txt"
+    if ENV['PYTHON3']
+      python3 = ENV['PYTHON3']
+    else
+      pyenv_dir = "#{spec.build_dir}/pyenv"
+      python3 = RbConfig::CONFIG['host_os'] =~ /mswin|mingw/ ?
+        "#{pyenv_dir}/Scripts/python.exe" : "#{pyenv_dir}/bin/python3"
+      unless File.file?(python3)
+        run!('python3', '-m', 'venv', pyenv_dir)
+      end
+      unless system(python3, '-c', 'import jsonschema, jinja2', :err => File::NULL)
+        run!(python3, '-m', 'pip', 'install', '--quiet', '-r', mbedtls_requirements)
+      end
     end
     unless system(python3, '-c', 'import jsonschema, jinja2', :err => File::NULL)
-      run!(python3, '-m', 'pip', 'install', '--quiet', '-r', mbedtls_requirements)
+      raise "mruby-tls: #{python3} needs the packages listed in #{mbedtls_requirements} " \
+            "to build mbedTLS 4.x (pip install -r #{mbedtls_requirements}), " \
+            "or set PYTHON3 to an interpreter that already has them"
     end
-  end
-  unless system(python3, '-c', 'import jsonschema, jinja2', :err => File::NULL)
-    raise "mruby-tls: #{python3} needs the packages listed in #{mbedtls_requirements} " \
-          "to build mbedTLS 4.x (pip install -r #{mbedtls_requirements}), " \
-          "or set PYTHON3 to an interpreter that already has them"
-  end
 
-  # Real MSVC only -- MinGW/Cygwin fall through to the else branch below.
-  is_msvc = RbConfig::CONFIG['host_os'] =~ /mswin/
+    # Real MSVC only -- MinGW/Cygwin fall through to the else branch below.
+    is_msvc = RbConfig::CONFIG['host_os'] =~ /mswin/
 
-  if is_msvc
-    libext   = '.lib'
-    prefix   = ''
-  else
-    libext   = '.a'
-    prefix   = 'lib'
-  end
-  # mbedtls/mbedx509/mbedcrypto are load-bearing -- mrb_tls.cpp links
-  # against all three directly (see the flags_before_libraries call below)
-  # and nothing here works without them. everest/p256m are optional bundled
-  # Curve25519/P-256 backends, only present for some build configurations,
-  # and never required for a link to succeed.
-  required_libnames = %w[mbedtls mbedx509 mbedcrypto]
-  optional_libnames = %w[everest p256m]
-  libnames = required_libnames + optional_libnames
-
-  # Where the archives land is CMake's decision, so ask CMake instead of
-  # guessing: GNUInstallDirs picks lib64 on 64-bit openSUSE/Fedora/RHEL
-  # and lib on Debian/Ubuntu, and it records what it chose in the build
-  # tree's CMakeCache.txt as CMAKE_INSTALL_LIBDIR. Hardcoding either name
-  # builds fine on half the distros and then reports a perfectly good
-  # build's libraries "missing" on the other half - with cmake and make
-  # both having exited 0, which sends you hunting an OOM that never
-  # happened.
-  #
-  # The invocation below pins CMAKE_INSTALL_LIBDIR=lib so fresh builds
-  # agree everywhere, but a tree configured before that pin still says
-  # what it actually did, and this reads that rather than assuming it.
-  #
-  # No cache means nothing has been configured yet, so nothing is built
-  # either - any answer works there, since it only has to fail the
-  # existence check below and trigger the build.
-  resolve_libpath = lambda do
-    cache = "#{build_dir}/CMakeCache.txt"
-    dir = 'lib'
-    if File.file?(cache)
-      line = File.foreach(cache).find { |l| l.start_with?('CMAKE_INSTALL_LIBDIR:') }
-      dir = line.split('=', 2).last.strip if line
+    if is_msvc
+      libext   = '.lib'
+      prefix   = ''
+    else
+      libext   = '.a'
+      prefix   = 'lib'
     end
-    # CMAKE_INSTALL_LIBDIR is normally relative to the install prefix,
-    # but it is allowed to be absolute.
-    dir =~ %r{\A(/|[A-Za-z]:[\\/])} ? dir : "#{build_dir}/#{dir}"
-  end
-  libpath = resolve_libpath.call
-  required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
+    # mbedtls/mbedx509/mbedcrypto are load-bearing -- mrb_tls.cpp links
+    # against all three directly (see the flags_before_libraries call below)
+    # and nothing here works without them. everest/p256m are optional bundled
+    # Curve25519/P-256 backends, only present for some build configurations,
+    # and never required for a link to succeed.
+    required_libnames = %w[mbedtls mbedx509 mbedcrypto]
+    optional_libnames = %w[everest p256m]
+    libnames = required_libnames + optional_libnames
 
-  # All three required libs, not just one -- a build interrupted partway
-  # through (OOM, disk full, Ctrl-C) can leave libmbedtls.a sitting there
-  # without libmbedcrypto.a/libmbedx509.a ever having been produced, and
-  # checking only the first of them would treat that as "already built"
-  # forever after, silently linking short every time - a mystifying wall of
-  # "undefined reference" from mrb_tls.cpp instead of a rebuild.
-  unless required_libpaths.all? { |p| File.file?(p) }
-    FileUtils.mkdir_p(build_dir)
-    Dir.chdir(build_dir) do
-      cmake_args = [
-        mbedtls_dir,
-        "-DCMAKE_INSTALL_PREFIX=#{build_dir}",
-        # Without this GNUInstallDirs installs to lib64 on 64-bit
-        # openSUSE/Fedora/RHEL and to lib on Debian/Ubuntu. Pin it so
-        # every distro puts the archives in the same place.
-        '-DCMAKE_INSTALL_LIBDIR=lib',
-        '-DCMAKE_BUILD_TYPE=Release',
-        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
-        # Test suites/sample programs need the "framework" submodule; skip.
-        '-DENABLE_TESTING=OFF',
-        '-DENABLE_PROGRAMS=OFF',
-        '-DUSE_STATIC_MBEDTLS_LIBRARY=ON',
-        '-DUSE_SHARED_MBEDTLS_LIBRARY=OFF',
-        '-DMBEDTLS_FATAL_WARNINGS=OFF',
-        # Pins CMake's own FindPython3 to the exact interpreter jsonschema
-        # was just confirmed importable on above (our venv, unless
-        # PYTHON3 overrides it) - without this, CMake resolves Python3
-        # from PATH on its own and code generation can end up running
-        # under a *different*, jsonschema-less interpreter than the one
-        # this script just checked.
-        "-DPython3_EXECUTABLE=#{python3}"
-      ]
-      if is_msvc
-        # mruby compiles /MD; mbedTLS defaults to /MT on MSVC, which would
-        # LNK2038-mismatch. CMP0091=NEW is needed for the runtime-library
-        # setting to take effect at all.
-        cmake_args += [
-          '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
-          '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL'
-        ]
+    # Where the archives land is CMake's decision, so ask CMake instead of
+    # guessing: GNUInstallDirs picks lib64 on 64-bit openSUSE/Fedora/RHEL
+    # and lib on Debian/Ubuntu, and it records what it chose in the build
+    # tree's CMakeCache.txt as CMAKE_INSTALL_LIBDIR. Hardcoding either name
+    # builds fine on half the distros and then reports a perfectly good
+    # build's libraries "missing" on the other half - with cmake and make
+    # both having exited 0, which sends you hunting an OOM that never
+    # happened.
+    #
+    # The invocation below pins CMAKE_INSTALL_LIBDIR=lib so fresh builds
+    # agree everywhere, but a tree configured before that pin still says
+    # what it actually did, and this reads that rather than assuming it.
+    #
+    # No cache means nothing has been configured yet, so nothing is built
+    # either - any answer works there, since it only has to fail the
+    # existence check below and trigger the build.
+    resolve_libpath = lambda do
+      cache = "#{build_dir}/CMakeCache.txt"
+      dir = 'lib'
+      if File.file?(cache)
+        line = File.foreach(cache).find { |l| l.start_with?('CMAKE_INSTALL_LIBDIR:') }
+        dir = line.split('=', 2).last.strip if line
       end
-      run!('cmake', *cmake_args)
-      if is_msvc
-        run!('cmake', '--build', '.', '--config', 'Release', '--target', 'install')
-      else
-        jobs = Integer(ENV['MRUBY_TLS_JOBS'] || `nproc`.strip)
-        run!('make', "-j#{jobs}")
-        run!('make', 'install')
-      end
+      # CMAKE_INSTALL_LIBDIR is normally relative to the install prefix,
+      # but it is allowed to be absolute.
+      dir =~ %r{\A(/|[A-Za-z]:[\\/])} ? dir : "#{build_dir}/#{dir}"
     end
-
-    # cmake/make/make install can all exit 0 (nothing above raises) and
-    # still not have produced every required library - e.g. a dependency
-    # CMake silently skips a subdirectory on a `find_package` miss, or
-    # `make` genuinely finished building everything it was asked to but a
-    # prior partial build's now-stale object files short-circuited part of
-    # the dependency graph. Either way, catch it *here*, loudly, with the
-    # exact missing path named - not as a wall of "undefined reference to
-    # mbedtls_ssl_*" out of the final mrbtest/mruby link, several build
-    # steps and zero useful context later.
-    # Ask again now that cmake has actually configured: before this ran
-    # there was no cache to read, so the paths above were a placeholder.
-    # libpath feeds the linker flags further down as well as the check
-    # below, so this updates it rather than just the check.
     libpath = resolve_libpath.call
     required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
 
-    missing = required_libpaths.reject { |p| File.file?(p) }
-    unless missing.empty?
-      raise "mruby-tls: mbedTLS build finished without producing:\n" \
-            "#{missing.map { |p| "  #{p}" }.join("\n")}\n" \
-            "cmake/make reported success above, so this is a partial/interrupted build " \
-            "(OOM, disk full, a skipped CMake subdirectory, ...), not a compile error - " \
-            "delete #{build_dir} and rebuild with more memory/disk, or re-run cmake by " \
-            "hand from #{build_dir} to see what it actually configured.\n" \
-            "(CMAKE_INSTALL_LIBDIR in #{build_dir}/CMakeCache.txt puts them in #{libpath}.)"
+    # All three required libs, not just one -- a build interrupted partway
+    # through (OOM, disk full, Ctrl-C) can leave libmbedtls.a sitting there
+    # without libmbedcrypto.a/libmbedx509.a ever having been produced, and
+    # checking only the first of them would treat that as "already built"
+    # forever after, silently linking short every time - a mystifying wall of
+    # "undefined reference" from mrb_tls.cpp instead of a rebuild.
+    unless required_libpaths.all? { |p| File.file?(p) }
+      FileUtils.mkdir_p(build_dir)
+      Dir.chdir(build_dir) do
+        cmake_args = [
+          mbedtls_dir,
+          "-DCMAKE_INSTALL_PREFIX=#{build_dir}",
+          # Without this GNUInstallDirs installs to lib64 on 64-bit
+          # openSUSE/Fedora/RHEL and to lib on Debian/Ubuntu. Pin it so
+          # every distro puts the archives in the same place.
+          '-DCMAKE_INSTALL_LIBDIR=lib',
+          '-DCMAKE_BUILD_TYPE=Release',
+          '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
+          # Test suites/sample programs need the "framework" submodule; skip.
+          '-DENABLE_TESTING=OFF',
+          '-DENABLE_PROGRAMS=OFF',
+          '-DUSE_STATIC_MBEDTLS_LIBRARY=ON',
+          '-DUSE_SHARED_MBEDTLS_LIBRARY=OFF',
+          '-DMBEDTLS_FATAL_WARNINGS=OFF',
+          # Pins CMake's own FindPython3 to the exact interpreter jsonschema
+          # was just confirmed importable on above (our venv, unless
+          # PYTHON3 overrides it) - without this, CMake resolves Python3
+          # from PATH on its own and code generation can end up running
+          # under a *different*, jsonschema-less interpreter than the one
+          # this script just checked.
+          "-DPython3_EXECUTABLE=#{python3}"
+        ]
+        if is_msvc
+          # mruby compiles /MD; mbedTLS defaults to /MT on MSVC, which would
+          # LNK2038-mismatch. CMP0091=NEW is needed for the runtime-library
+          # setting to take effect at all.
+          cmake_args += [
+            '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL'
+          ]
+        end
+        run!('cmake', *cmake_args)
+        if is_msvc
+          run!('cmake', '--build', '.', '--config', 'Release', '--target', 'install')
+        else
+          jobs = Integer(ENV['MRUBY_TLS_JOBS'] || `nproc`.strip)
+          run!('make', "-j#{jobs}")
+          run!('make', 'install')
+        end
+      end
+
+      # cmake/make/make install can all exit 0 (nothing above raises) and
+      # still not have produced every required library - e.g. a dependency
+      # CMake silently skips a subdirectory on a `find_package` miss, or
+      # `make` genuinely finished building everything it was asked to but a
+      # prior partial build's now-stale object files short-circuited part of
+      # the dependency graph. Either way, catch it *here*, loudly, with the
+      # exact missing path named - not as a wall of "undefined reference to
+      # mbedtls_ssl_*" out of the final mrbtest/mruby link, several build
+      # steps and zero useful context later.
+      # Ask again now that cmake has actually configured: before this ran
+      # there was no cache to read, so the paths above were a placeholder.
+      # libpath feeds the linker flags further down as well as the check
+      # below, so this updates it rather than just the check.
+      libpath = resolve_libpath.call
+      required_libpaths = required_libnames.map { |n| "#{libpath}/#{prefix}#{n}#{libext}" }
+
+      missing = required_libpaths.reject { |p| File.file?(p) }
+      unless missing.empty?
+        raise "mruby-tls: mbedTLS build finished without producing:\n" \
+              "#{missing.map { |p| "  #{p}" }.join("\n")}\n" \
+              "cmake/make reported success above, so this is a partial/interrupted build " \
+              "(OOM, disk full, a skipped CMake subdirectory, ...), not a compile error - " \
+              "delete #{build_dir} and rebuild with more memory/disk, or re-run cmake by " \
+              "hand from #{build_dir} to see what it actually configured.\n" \
+              "(CMAKE_INSTALL_LIBDIR in #{build_dir}/CMakeCache.txt puts them in #{libpath}.)"
+      end
     end
   end
 
@@ -239,10 +248,12 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   # gem's own public header (include/mruby/tls.h) stays tracked. See
   # .gitignore.
   exposed_include = "#{spec.dir}/include"
-  FileUtils.mkdir_p(exposed_include)
-  %w[mbedtls psa tf-psa-crypto].each do |header_dir|
-    src = "#{build_dir}/include/#{header_dir}"
-    FileUtils.cp_r(src, exposed_include) if File.directory?(src)
+  unless cleaning
+    FileUtils.mkdir_p(exposed_include)
+    %w[mbedtls psa tf-psa-crypto].each do |header_dir|
+      src = "#{build_dir}/include/#{header_dir}"
+      FileUtils.cp_r(src, exposed_include) if File.directory?(src)
+    end
   end
 
   # mbedTLS splits into three static libraries; mbedtls depends on mbedx509
