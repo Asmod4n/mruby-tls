@@ -11,16 +11,20 @@ MRB_BEGIN_DECL
 /*
  * TLS for a caller that owns its own I/O.
  *
- * Everything else in this gem drives mbedTLS through a socket. These
+ * Everything else in this gem drives TLS through a socket. These
  * functions remove the transport instead: the caller feeds ciphertext in
- * as it arrives, takes whatever ciphertext mbedTLS produced back out and
- * writes it however it likes, and drives the handshake with plain
+ * as it arrives, takes whatever ciphertext the library produced back out
+ * and writes it however it likes, and drives the handshake with plain
  * want-more semantics. Nothing here touches a descriptor, which is what
  * makes it usable from an event loop whose "socket" may not be a
  * process-level fd at all (an io_uring adapter reading into kernel
  * buffers against registered descriptors, say).
  *
- * `conn` is always a Tls::Client returned by mrb_tls_accept_memory() -
+ * No provider type appears in any signature below, on purpose: this is
+ * the contract a second implementation (Schannel) has to satisfy, not a
+ * view of OpenSSL.
+ *
+ * `conn` is always a Tls connection returned by mrb_tls_accept_memory() -
  * an ordinary Ruby object, so its lifetime is the GC's problem as usual;
  * keep it reachable for as long as the connection lives. Passing any
  * other TLS object raises.

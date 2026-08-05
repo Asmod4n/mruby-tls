@@ -36,7 +36,7 @@ module Tls
         return spec
       end
       if down == 'none'
-        raise Tls::Config::Error, "ecdhecurve 'none' is not supported by the mbedTLS backend"
+        raise Tls::Config::Error, "ecdhecurve 'none' is not supported"
       end
       names = spec.split(/[:,]/).map(&:strip).reject(&:empty?)
       raise Tls::Config::Error, 'no ecdhe curves selected' if names.empty?
