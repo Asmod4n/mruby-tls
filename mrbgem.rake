@@ -173,6 +173,51 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
           # this script just checked.
           "-DPython3_EXECUTABLE=#{python3}"
         ]
+
+        # -march=native for mbedTLS's own compilation.
+        #
+        # It has to be here rather than on this gem's sources: by the time
+        # mrb_tls.cpp compiles, the AES implementation is already baked into
+        # libtfpsacrypto. tf-psa-crypto/drivers/builtin/src/aesni.h:38 only
+        # defines MBEDTLS_AESNI_HAVE_INTRINSICS when __AES__ and __PCLMUL__
+        # are set, which gcc/clang define from -march - and the intrinsics
+        # path carries gcm.c's CLMUL GHASH with it (gcm.c:66,351). GCM is
+        # AES-CTR plus GHASH, so both halves matter.
+        #
+        # Upstream offers nothing to ask: there is no check_c_compiler_flag,
+        # no option, nothing in any CMakeLists in the tree. crypto_config.h's
+        # doc comment telling you to pass machine flags is the whole of the
+        # supported mechanism, so this is a flag we set or a thing we do not
+        # get.
+        #
+        # native, not an enumerated list, so it covers every architecture the
+        # compiler knows about - Armv8's AESCE included - instead of an x86
+        # list that would need extending. The cost is that the artifact is
+        # then only guaranteed to run on a cpu like the one that built it,
+        # which is the normal bargain for a gem compiled on its target.
+        # MRUBY_TLS_MARCH overrides the value; set it empty to opt out.
+        unless is_msvc
+          march = ENV.fetch('MRUBY_TLS_MARCH', '-march=native')
+          # Never on a cross build: "native" there means the *build* host,
+          # so it would emit instructions for the wrong cpu entirely.
+          cross = spec.build.kind_of?(MRuby::CrossBuild)
+          if !march.empty? && !cross
+            cc = ENV['CC'] || RbConfig::CONFIG['CC'] || 'cc'
+            probe = "#{build_dir}/.march_probe.c"
+            FileUtils.mkdir_p(build_dir)
+            File.write(probe, "int main(void){return 0;}\n")
+            ok = system("#{cc} #{march} -c #{probe} -o #{probe}.o",
+                        out: File::NULL, err: File::NULL)
+            FileUtils.rm_f([probe, "#{probe}.o"])
+            if ok
+              cmake_args << "-DCMAKE_C_FLAGS=#{march}"
+            else
+              warn "mruby-tls: #{cc} rejected #{march}; mbedTLS keeps its default " \
+                   "codegen. Set MRUBY_TLS_MARCH to something it accepts, or empty " \
+                   "to silence this."
+            end
+          end
+        end
         if is_msvc
           # mruby compiles /MD; mbedTLS defaults to /MT on MSVC, which would
           # LNK2038-mismatch. CMP0091=NEW is needed for the runtime-library
