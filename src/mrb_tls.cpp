@@ -850,12 +850,21 @@ want_symbol(mrb_state *mrb, mrb_tls_conn_t *c, int ret, mrb_value *sym,
 {
   int err = SSL_get_error(c->ssl, ret);
 
+  /* :tls_want_pollin / :tls_want_pollout, not :wait_readable /
+   * :wait_writable. These symbols are the return value of every
+   * _nonblock method and therefore part of the public contract that
+   * master established under libtls, where they were named after
+   * TLS_WANT_POLLIN / TLS_WANT_POLLOUT. Renaming them to something more
+   * idiomatic broke every caller *silently* - a `case r when
+   * :tls_want_pollin` simply stops matching, with no exception and no
+   * warning, and the connection quietly stalls. The backend changed;
+   * the names callers match on must not. */
   switch (err) {
     case SSL_ERROR_WANT_READ:
-      *sym = mrb_symbol_value(MRB_SYM(wait_readable));
+      *sym = mrb_symbol_value(MRB_SYM(tls_want_pollin));
       return 1;
     case SSL_ERROR_WANT_WRITE:
-      *sym = mrb_symbol_value(MRB_SYM(wait_writable));
+      *sym = mrb_symbol_value(MRB_SYM(tls_want_pollout));
       return 1;
     case SSL_ERROR_ZERO_RETURN:
       /* Clean close_notify from the peer. */
@@ -863,7 +872,7 @@ want_symbol(mrb_state *mrb, mrb_tls_conn_t *c, int ret, mrb_value *sym,
       return 2;
     case SSL_ERROR_SYSCALL:
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-        *sym = mrb_symbol_value(MRB_SYM(wait_readable));
+        *sym = mrb_symbol_value(MRB_SYM(tls_want_pollin));
         return 1;
       }
       /* ret == 0 here means the peer went away without close_notify.
@@ -1043,10 +1052,10 @@ conn_close_common(mrb_state *mrb, mrb_value self, int nonblock)
   if (ret < 0) {
     int err = SSL_get_error(c->ssl, ret);
     if (nonblock && (err == SSL_ERROR_WANT_READ)) {
-      return mrb_symbol_value(MRB_SYM(wait_readable));
+      return mrb_symbol_value(MRB_SYM(tls_want_pollin));
     }
     if (nonblock && (err == SSL_ERROR_WANT_WRITE)) {
-      return mrb_symbol_value(MRB_SYM(wait_writable));
+      return mrb_symbol_value(MRB_SYM(tls_want_pollout));
     }
     /* A peer that already vanished is not an error worth raising from
      * close - the connection is over either way. */

@@ -407,3 +407,58 @@ assert('Tls negotiates a modern protocol version') do
   assert_include ['TLSv1.2', 'TLSv1.3'], version
   assert_kind_of String, cipher
 end
+
+# The API master established, pinned so a backend swap cannot quietly
+# change it again.
+#
+# This exists because the OpenSSL rewrite renamed the symbols the
+# _nonblock methods return - :tls_want_pollin/:tls_want_pollout became
+# :wait_readable/:wait_writable - and that break is invisible at runtime.
+# A caller written as `case conn.read_nonblock(n) when :tls_want_pollin`
+# simply stops matching: no exception, no warning, the connection just
+# stalls. Nothing in the suite noticed.
+assert('nonblock methods return master\'s :tls_want_poll* symbols') do
+  # Both ends non-blocking and the client silent, so the server's first
+  # handshake step has nothing to read and must say so - with the name
+  # callers actually match on.
+  listener = TCPServer.new('127.0.0.1', 0)
+  csock    = TCPSocket.new('127.0.0.1', listener.addr[1])
+  ssock    = listener.accept
+  csock._setnonblock(true)
+  ssock._setnonblock(true)
+
+  sconn = Tls::Server.new(tls_test_server_config(TLS_TEST_CERT_PEM)).accept_socket(ssock)
+  got   = sconn.handshake_nonblock
+
+  # The exact name is the contract. tls_test_handshake only asks
+  # `is_a?(Symbol)`, which is why the rename from :tls_want_pollin to
+  # :wait_readable passed the whole suite without a murmur.
+  assert_equal :tls_want_pollin, got
+ensure
+  sconn.close rescue nil
+  ssock.close rescue nil
+  csock.close rescue nil
+  listener.close rescue nil
+end
+
+assert('every method master defined is still callable') do
+  # Names only - a missing one is a NoMethodError for somebody's code
+  # that this gem promised would keep working.
+  %i[ca_file= ca_path= cert_file= cert_mem= ciphers= clear_keys
+     ecdhecurve= key_file= key_mem= noverify parse_protocols
+     protocols= verify verify_depth=].each do |m|
+    assert_true Tls::Config.method_defined?(m), "Tls::Config##{m} is gone"
+  end
+  %i[cipher close close_nonblock configure handshake handshake_nonblock
+     read read_nonblock reset version write write_nonblock].each do |m|
+    assert_true Tls::Context.method_defined?(m), "Tls::Context##{m} is gone"
+  end
+  %i[connect connect_fds connect_socket].each do |m|
+    assert_true Tls::Client.method_defined?(m), "Tls::Client##{m} is gone"
+  end
+  assert_true Tls::Server.method_defined?(:accept_socket)
+  assert_true Tls.respond_to?(:load_file)
+  %i[TLSv1 TLSv1_0 TLSv1_1 TLSv1_2 TLSv1_3 All Default].each do |c|
+    assert_true Tls::Protocol.const_defined?(c), "Tls::Protocol::#{c} is gone"
+  end
+end
