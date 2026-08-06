@@ -1591,6 +1591,42 @@ mrb_tls_write_memory(mrb_state *mrb, mrb_value conn, const void *buf, size_t len
   return -1;
 }
 
+/* Emits a close_notify alert into the outgoing BIO, so the caller can
+ * flush it before closing the socket.
+ *
+ * Not optional politeness. OpenSSL 3.x reports a TCP connection that ends
+ * without close_notify as SSL_R_UNEXPECTED_EOF_WHILE_READING - a hard
+ * error, not a clean EOF - so a server that just closes its socket makes
+ * every OpenSSL client raise on the last read of an otherwise perfectly
+ * good response. mbedTLS tolerated it, which is why this only surfaced
+ * after the backend swap. RFC 8446 6.1 requires the alert either way.
+ *
+ * One-way: SSL_shutdown's first call writes our alert and returns 0
+ * meaning "sent, peer has not answered". We do not call it again, and do
+ * not wait for the peer's close_notify - the caller is closing, and a
+ * client that never answers must not be able to hold a descriptor open.
+ *
+ * Returns the number of ciphertext bytes now pending, which the caller
+ * flushes with mrb_tls_pending/mrb_tls_drain exactly as for any other
+ * write. Returns 0 if there was nothing to send or the session was never
+ * established.
+ */
+MRB_API int
+mrb_tls_shutdown_memory(mrb_state *mrb, mrb_value conn)
+{
+  mrb_tls_conn_t *c = mem_conn(mrb, conn);
+
+  if (!c->ssl) return 0;
+  /* Before the handshake finished there is no key schedule to protect an
+   * alert with, so there is nothing meaningful to send. */
+  if (!SSL_is_init_finished(c->ssl)) return 0;
+
+  ERR_clear_error();
+  (void)SSL_shutdown(c->ssl);
+  ERR_clear_error();
+  return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */

@@ -71,6 +71,12 @@ MRB_API int mrb_tls_read_memory(mrb_state *mrb, mrb_value conn, void *buf, size_
  * above. Returns bytes accepted, or -1 on failure. */
 MRB_API int mrb_tls_write_memory(mrb_state *mrb, mrb_value conn, const void *buf, size_t len);
 
+/* Queues a close_notify alert into the outgoing BIO. Flush it with
+ * mrb_tls_pending/mrb_tls_drain before closing the socket: OpenSSL 3.x
+ * treats a connection that ends without one as a hard error
+ * (SSL_R_UNEXPECTED_EOF_WHILE_READING), not a clean EOF. */
+MRB_API int mrb_tls_shutdown_memory(mrb_state *mrb, mrb_value conn);
+
 MRB_END_DECL
 
 #endif
