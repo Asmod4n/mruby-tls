@@ -644,11 +644,33 @@ struct sni_args {
   mrb_value host;
 };
 
+/* mrb_yield_argv, not mrb_funcall(block, :call).
+ *
+ * They are not interchangeable here, and the difference is a segfault.
+ * `Proc#call` is an irep proc whose entire body is OP_CALL, so funcall
+ * re-enters the VM to run it; vm_call_proc's cfunc branch then does
+ * `cipop` and reads `ci->proc->body.irep` off the frame underneath
+ * (mruby src/vm.c:2253). Reached from inside a C function - which is
+ * always, since this runs inside OpenSSL's handshake - that frame is the
+ * one mrb_funcall_with_block pushed, and it set `ci->proc = NULL`
+ * because the method it dispatched was a plain cfunc (vm.c:869,
+ * MRB_METHOD_PROC_P is false for mrb_define_method'd C functions).
+ * Dereferencing NULL is the crash.
+ *
+ * It only bites when the block is *itself* cfunc-backed - a proc from
+ * mrb_proc_new_cfunc_with_env, which is exactly what webmachine-mruby
+ * hands us as its SNI hook. A Ruby block takes the irep branch and is
+ * fine, which is why test/tls_sni.rb passed throughout and the crash
+ * only showed up under the io_uring adapter.
+ *
+ * mrb_yield_argv calls the proc directly: yield_with_attr has an
+ * explicit cfunc branch that invokes the function and pops, never
+ * touching the caller frame's irep. */
 static mrb_value
 sni_call(mrb_state *mrb, void *ud)
 {
   struct sni_args *a = (struct sni_args *)ud;
-  return mrb_funcall_argv(mrb, a->block, MRB_SYM(call), 1, &a->host);
+  return mrb_yield_argv(mrb, a->block, 1, &a->host);
 }
 
 static int
@@ -660,6 +682,7 @@ sni_cb(SSL *ssl, int *al, void *arg)
   mrb_value block, result;
   mrb_bool raised = FALSE;
   struct sni_args args;
+  int ai;
 
   (void)al;
   (void)arg;
@@ -671,12 +694,44 @@ sni_cb(SSL *ssl, int *al, void *arg)
   block = mrb_iv_get(mrb, c->self, MRB_IVSYM(sni_block));
   if (mrb_nil_p(block)) return SSL_TLSEXT_ERR_OK;
 
+  /* Checked here rather than left to mrb_yield_argv's own check_block,
+   * because that raises - and raising is the one thing this callback
+   * must not do casually while OpenSSL owns the stack. Anything that is
+   * not a Proc in @sni_block cannot have got there through the public
+   * constructor, so treating it as "no hook" is both the safe answer and
+   * the truthful one. */
+  if (!mrb_proc_p(block)) return SSL_TLSEXT_ERR_OK;
+
   host = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
   if (!host) return SSL_TLSEXT_ERR_OK;
 
+  /* The GC must not run out from under the callback.
+   *
+   * The block is reachable only through c->self's ivar table, and
+   * c->self is an mrb_value living in a C struct the collector does not
+   * scan - so if the last Ruby-side reference to the Tls::Server dropped
+   * while a handshake was in flight, both it and the block are
+   * collectable at the next allocation. The callback allocates (the host
+   * String, immediately below), so that next allocation is guaranteed to
+   * happen right here.
+   *
+   * Both go on the arena for the duration. The save/restore pair bounds
+   * the growth: this is called once per handshake and the arena is a
+   * fixed-size stack, so protecting without restoring would eventually
+   * overflow it on a long-lived server. */
+  ai = mrb_gc_arena_save(mrb);
+  mrb_gc_protect(mrb, block);
+
   args.block = block;
-  args.host = mrb_str_new_cstr(mrb, host);
+  args.host = mrb_str_new_cstr(mrb, host); /* already on the arena */
   result = mrb_protect_error(mrb, sni_call, &args, &raised);
+
+  /* Restore first, then re-protect what has to outlive it: the restore
+   * drops everything the callback left on the arena, `result` included,
+   * and every path below either stores it in an ivar or reads through
+   * it. Protecting before the restore would be undone by the restore. */
+  mrb_gc_arena_restore(mrb, ai);
+  mrb_gc_protect(mrb, result);
 
   /* A block that blew up, or answered with something that is not a
    * certificate selection, aborts the handshake - it must not quietly
