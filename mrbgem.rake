@@ -64,6 +64,49 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
     raise "mruby-tls needs OpenSSL >= 3.0#{found}. Try: #{hint}"
   end
 
+  # LibreSSL answers to `libssl.pc` too, and its own release numbering
+  # passed 3.0 years ago - so the `--atleast-version=3.0 libssl` check
+  # above, written to mean "OpenSSL 3.0 or newer", is satisfied by any
+  # LibreSSL from 3.0 on. The build then gets hundreds of files in before
+  # failing on SSL_get1_peer_certificate, an OpenSSL 3.0 rename that
+  # LibreSSL still spells SSL_get_peer_certificate. A compile error in a
+  # file nobody was editing is a terrible way to find out which TLS
+  # library you are building against.
+  #
+  # The vendor is not something pkg-config reports, so the header is
+  # asked instead: an opensslv.h defines LIBRESSL_VERSION_NUMBER if and
+  # only if it is LibreSSL's.
+  #
+  # This rejects rather than shimming. Supporting LibreSSL is a port, not
+  # one symbol - SSL_OP_ENABLE_KTLS, one of the two reasons this gem is
+  # on OpenSSL at all, does not exist there either.
+  incdirs = `pkg-config --cflags-only-I libssl 2>/dev/null`.split
+                                                           .grep(/\A-I/) { |f| f[2..] }
+  incdirs += ['/usr/local/include', '/usr/include']
+  header = incdirs.map { |d| File.join(d, 'openssl', 'opensslv.h') }.find { |f| File.readable?(f) }
+  if header && File.read(header).include?('LIBRESSL_VERSION_NUMBER')
+    prefix = File.dirname(File.dirname(File.dirname(header)))
+    modver = `pkg-config --modversion libssl 2>/dev/null`.strip
+    raise <<~MSG
+      mruby-tls found LibreSSL, not OpenSSL: #{header}
+
+      pkg-config reports libssl #{modver}, which passes this gem's ">= 3.0"
+      check because LibreSSL numbers its own releases 3.x and 4.x. It is a
+      different library, and this gem needs OpenSSL 3.0+.
+
+      Something has put a LibreSSL prefix (#{prefix}) ahead of the system
+      OpenSSL in pkg-config's search order. To build against the system one
+      without removing anything:
+
+        PKG_CONFIG_PATH=$(pkg-config --variable=pcfiledir openssl) rake
+
+      To see what is being picked up and where it came from:
+
+        pkg-config --variable=prefix libssl
+        pkg-config --debug libssl 2>&1 | grep -i 'looking\\|found'
+    MSG
+  end
+
   # Both, in this order: libssl needs libcrypto, and search_package does not
   # pass --static, so Requires.private is never expanded for us.
   unless spec.search_package('libssl') && spec.search_package('libcrypto')
