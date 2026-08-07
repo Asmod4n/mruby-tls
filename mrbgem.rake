@@ -8,7 +8,7 @@ cleaning = Rake.application.top_level_tasks.any? { |t| t =~ /\Aclean|deep_clean\
 MRuby::Gem::Specification.new('mruby-tls') do |spec|
   spec.license = 'Apache-2'
   spec.author  = 'Hendrik Beskow'
-  spec.summary = 'mruby bindings to OpenSSL'
+  spec.summary = 'TLS for mruby - OpenSSL, or Schannel on Windows'
 
   # Declared before the `cleaning` bail-out: the gem graph must look the
   # same whatever task is running, or a clean and a build disagree about
@@ -21,6 +21,16 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   spec.add_test_dependency 'mruby-socket', :core => 'mruby-socket'
 
   next if cleaning
+
+  # Everything below is OpenSSL detection, and OpenSSL is not the Windows
+  # backend - src/mrb_tls.cpp selects backend_schannel.hpp there, which
+  # needs secur32/crypt32 and no pkg-config at all. Probing for libssl on
+  # a Windows target would fail the build over a library that target does
+  # not use.
+  if spec.for_windows?
+    spec.linker.libraries += %w[secur32 crypt32 ws2_32]
+    next
+  end
 
   # The system OpenSSL, found through pkg-config, and nothing vendored.
   #
