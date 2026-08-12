@@ -101,6 +101,7 @@
 typedef struct mrb_tls_config {
   SSL_CTX *ctx;
   uint32_t protocols;
+  int ktls_tx; /* Config#ktls_tx=: capture handover material per connection */
   int verify_depth;
   /* 1 = enforced. Config#verify turns all three on, Config#noverify
    * turns exactly one off. */
@@ -123,9 +124,25 @@ typedef struct mrb_tls_conn {
   int own_fd; /* we created the socket in #connect and must close it */
   int fd;
 
+  /* kTLS TX handover material, captured during the handshake when the
+   * Config asked for it. See mrb_tls_ktls_tx_params and <mruby/tls.h>.
+   *
+   * Per connection, not per process. The spike this is ported from
+   * parked the secret in a file-scope global, which is correct for one
+   * connection and a key mix-up for a server. The keylog callback
+   * receives the SSL*, and conn_ssl_index already maps that back to
+   * here - the route sni_cb takes. */
+  unsigned char ktls_secret[EVP_MAX_MD_SIZE];
+  size_t ktls_secret_len;
+
   mrb_state *mrb;
   mrb_value self;
 } mrb_tls_conn_t;
+
+/* Defined with the rest of the kTLS code, below conn_ssl_index which it
+ * needs; declared here because Config#ktls_tx= installs it and comes
+ * first in the file. */
+static void ktls_keylog_cb(const SSL *ssl, const char *line);
 
 static void
 config_free(mrb_state *mrb, void *p)
@@ -297,10 +314,17 @@ config_initialize(mrb_state *mrb, mrb_value self)
                    SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
 #ifdef SSL_OP_ENABLE_KTLS
-  /* Kernel TLS where the platform has it. OpenSSL falls back silently
-   * when the kernel, the ciphersuite or the build does not support it,
-   * so this is safe unconditionally - and it is the whole reason the
-   * Linux builds use this backend. */
+  /* Kernel TLS where OpenSSL can install it itself. It falls back
+   * silently when the kernel, the ciphersuite or the build does not
+   * support it, so this is safe unconditionally.
+   *
+   * It does nothing at all on the memory-BIO path, which is the one
+   * this gem exists for: OpenSSL only installs kTLS when it owns a
+   * socket BIO and can do the setsockopt itself, and a memory BIO has
+   * no fd. Callers on that path want mrb_tls_ktls_tx_params instead,
+   * which hands out the key material so they can install it however
+   * they reach their socket. Left on for the socket-BIO users
+   * (Tls::Client#connect), where it is free. */
   SSL_CTX_set_options(cfg->ctx, SSL_OP_ENABLE_KTLS);
 #endif
 
@@ -319,6 +343,39 @@ config_set_ca_file(mrb_state *mrb, mrb_value self)
     raise_ossl(mrb, tls_config_error_class(mrb), "cannot load CA file");
   }
   mrb_iv_set(mrb, self, MRB_IVSYM(ca_file), mrb_str_new_cstr(mrb, path));
+  return self;
+}
+
+/* Config#ktls_tx = true, before any handshake on this config.
+ *
+ * Off by default and opt-in rather than automatic, because it costs two
+ * things every connection on this config would otherwise keep:
+ *
+ *   - Session tickets are disabled. The kernel starts counting records
+ *     from the sequence it is handed, so nothing may be written under
+ *     the application keys before the handover or rec_seq is already
+ *     past 0 - and OpenSSL has no public accessor for the current
+ *     record sequence to hand over instead.
+ *   - The traffic secret is retained on every connection until it
+ *     closes, rather than living only inside OpenSSL.
+ *
+ * Neither is worth paying on a config whose caller will never take the
+ * send side over. */
+static mrb_value
+config_set_ktls_tx(mrb_state *mrb, mrb_value self)
+{
+  mrb_tls_config_t *cfg = config_ptr(mrb, self);
+  mrb_bool on;
+
+  mrb_get_args(mrb, "b", &on);
+  cfg->ktls_tx = on ? 1 : 0;
+  if (on) {
+    SSL_CTX_set_keylog_callback(cfg->ctx, ktls_keylog_cb);
+    SSL_CTX_set_num_tickets(cfg->ctx, 0);
+  } else {
+    SSL_CTX_set_keylog_callback(cfg->ctx, NULL);
+  }
+  mrb_iv_set(mrb, self, MRB_IVSYM(ktls_tx), mrb_bool_value(on));
   return self;
 }
 
@@ -601,6 +658,74 @@ conn_ptr(mrb_state *mrb, mrb_value self)
 /* Index for stashing the Ruby connection object on the SSL, so the SNI
  * callback can find its way back into mruby. */
 static int conn_ssl_index = -1;
+
+/* ------------------------------------------------------------------ */
+/* kTLS TX handover                                                    */
+/* ------------------------------------------------------------------ */
+
+/* The tap. OpenSSL has no export-keys API, but the keylog callback
+ * emits SERVER_TRAFFIC_SECRET_0, which is that same secret, and
+ * deriving key and iv from it is RFC 8446 rather than a library call.
+ *
+ * One line per secret; the server application traffic secret is the
+ * only one a TX handover needs. Stored on the connection the SSL
+ * belongs to - conn_ssl_index is set before the handshake runs, so it
+ * always resolves by the time this fires. */
+static void
+ktls_keylog_cb(const SSL *ssl, const char *line)
+{
+  static const char kPrefix[] = "SERVER_TRAFFIC_SECRET_0 ";
+  if (strncmp(line, kPrefix, sizeof(kPrefix) - 1) != 0) return;
+
+  mrb_tls_conn_t *c =
+      (mrb_tls_conn_t *)SSL_get_ex_data((SSL *)ssl, conn_ssl_index);
+  if (!c) return;
+
+  /* "LABEL <client_random hex> <secret hex>" - the secret is the last
+   * field, so scan back rather than parse forward. */
+  const char *hex = strrchr(line, ' ');
+  if (!hex) return;
+  hex++;
+
+  size_t n = strlen(hex) / 2;
+  if (n == 0 || n > sizeof(c->ktls_secret)) return;
+  for (size_t i = 0; i < n; i++) {
+    unsigned byte;
+    if (sscanf(hex + 2 * i, "%2x", &byte) != 1) return;
+    c->ktls_secret[i] = (unsigned char)byte;
+  }
+  c->ktls_secret_len = n;
+}
+
+/* RFC 8446 7.1 HKDF-Expand-Label. Every output here (a 16 or 32 byte
+ * key, a 12 byte iv) is at most one hash block, so HKDF-Expand reduces
+ * to a single HMAC with the T(1) counter appended. */
+static int
+ktls_expand_label(const EVP_MD *md, const unsigned char *secret, size_t secret_len,
+                  const char *label, unsigned char *out, size_t out_len)
+{
+  unsigned char info[64];
+  const size_t label_len = strlen(label);
+  size_t l = 0;
+
+  if (6 + label_len > 255 || 2 + 1 + 6 + label_len + 1 + 1 > sizeof(info)) return 0;
+
+  info[l++] = (unsigned char)(out_len >> 8);
+  info[l++] = (unsigned char)(out_len & 0xff);
+  info[l++] = (unsigned char)(6 + label_len);
+  memcpy(info + l, "tls13 ", 6);      l += 6;
+  memcpy(info + l, label, label_len); l += label_len;
+  info[l++] = 0; /* empty context */
+  info[l++] = 1; /* T(1) */
+
+  unsigned char t[EVP_MAX_MD_SIZE];
+  unsigned int tl = 0;
+  if (!HMAC(md, secret, (int)secret_len, info, l, t, &tl)) return 0;
+  if (tl < out_len) return 0;
+  memcpy(out, t, out_len);
+  OPENSSL_cleanse(t, sizeof(t));
+  return 1;
+}
 
 static mrb_value
 conn_config_value(mrb_state *mrb, mrb_value self)
@@ -1637,6 +1762,61 @@ mrb_tls_shutdown_memory(mrb_state *mrb, mrb_value conn)
   return 0;
 }
 
+MRB_API int
+mrb_tls_ktls_tx_params(mrb_state *mrb, mrb_value conn, mrb_tls_ktls_tx_t *out)
+{
+  if (!out) return -1;
+  mrb_tls_conn_t *c =
+      (mrb_tls_conn_t *)mrb_data_check_get_ptr(mrb, conn, &tls_conn_type);
+  if (!c || !c->ssl) return -1;
+
+  /* Nothing to hand over before the key schedule exists, and the
+   * secret only lands here if Config#ktls_tx= asked for the tap. */
+  if (!SSL_is_init_finished(c->ssl)) return -1;
+  if (c->ktls_secret_len == 0) return -1;
+
+  /* TLS 1.3 only. 1.2 puts an explicit nonce in every record and the
+   * kernel's 1.2 handover wants a different construction; there is no
+   * reason to support it when this gem can require 1.3 for the one
+   * caller that asks for kTLS. */
+  if (SSL_version(c->ssl) != TLS1_3_VERSION) return -1;
+
+  const SSL_CIPHER *sc = SSL_get_current_cipher(c->ssl);
+  if (!sc) return -1;
+
+  size_t key_len;
+  int cipher;
+  switch (SSL_CIPHER_get_id(sc) & 0xffff) {
+    case 0x1301: cipher = MRB_TLS_KTLS_AES_GCM_128;       key_len = 16; break;
+    case 0x1302: cipher = MRB_TLS_KTLS_AES_GCM_256;       key_len = 32; break;
+    case 0x1303: cipher = MRB_TLS_KTLS_CHACHA20_POLY1305; key_len = 32; break;
+    default: return -1; /* CCM variants: no kernel equivalent worth it */
+  }
+
+  /* The hash behind the cipher suite, which is what the traffic secret
+   * was expanded with - SHA-384 for AES-256-GCM, SHA-256 otherwise. */
+  const EVP_MD *md = SSL_CIPHER_get_handshake_digest(sc);
+  if (!md) return -1;
+
+  memset(out, 0, sizeof(*out));
+  out->cipher  = cipher;
+  out->version = 0x0304;
+  out->key_len = key_len;
+  out->iv_len  = 12;
+
+  if (!ktls_expand_label(md, c->ktls_secret, c->ktls_secret_len,
+                         "key", out->key, key_len) ||
+      !ktls_expand_label(md, c->ktls_secret, c->ktls_secret_len,
+                         "iv", out->iv, 12)) {
+    OPENSSL_cleanse(out, sizeof(*out));
+    return -1;
+  }
+
+  /* rec_seq stays zero: tickets are off on a ktls_tx config, so nothing
+   * has been written under these keys yet. */
+  return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
@@ -1679,6 +1859,7 @@ mrb_mruby_tls_gem_init(mrb_state *mrb)
   mrb_define_method_id(mrb, conf_c, MRB_SYM_E(verify_depth), config_set_verify_depth, MRB_ARGS_REQ(1));
   mrb_define_method_id(mrb, conf_c, MRB_SYM(verify), config_verify, MRB_ARGS_NONE());
   mrb_define_method_id(mrb, conf_c, MRB_SYM(noverify), config_noverify, MRB_ARGS_REQ(1));
+  mrb_define_method_id(mrb, conf_c, MRB_SYM_E(ktls_tx), config_set_ktls_tx, MRB_ARGS_REQ(1));
   mrb_define_method_id(mrb, conf_c, MRB_SYM(clear_keys), config_clear_keys, MRB_ARGS_NONE());
   mrb_define_method_id(mrb, conf_c, MRB_SYM(_pack_ciphersuites), config_pack_ciphersuites, MRB_ARGS_REQ(1));
   mrb_define_method_id(mrb, conf_c, MRB_SYM(_pack_groups), config_pack_groups, MRB_ARGS_REQ(1));

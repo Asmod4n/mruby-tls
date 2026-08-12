@@ -77,6 +77,64 @@ MRB_API int mrb_tls_write_memory(mrb_state *mrb, mrb_value conn, const void *buf
  * (SSL_R_UNEXPECTED_EOF_WHILE_READING), not a clean EOF. */
 MRB_API int mrb_tls_shutdown_memory(mrb_state *mrb, mrb_value conn);
 
+/* ------------------------------------------------------------------ */
+/* Kernel TLS TX handover                                              */
+/* ------------------------------------------------------------------ */
+
+/* Hand the record layer for the SEND direction to the kernel, so bulk
+ * bytes can be write(2)'d or splice(2)'d as plaintext and encrypted on
+ * the way out.
+ *
+ * This deliberately does NOT touch a socket, and does not use OpenSSL's
+ * own SSL_OP_ENABLE_KTLS: that path only works when OpenSSL owns a
+ * socket BIO and performs the setsockopt itself, and a caller in
+ * io_uring direct-descriptor mode has no process fd to give it - the
+ * connection lives in the ring's file table and never gets one. So this
+ * hands out the key material instead and the caller installs it however
+ * it reaches its socket.
+ *
+ * The kernel's own tls12_crypto_info_* structs are Linux headers, so
+ * they are not used here. The caller builds them from these fields:
+ * for TLS 1.3 the derived 12-byte nonce splits into salt (first 4) and
+ * iv (last 8), and rec_seq is what the kernel starts counting from.
+ *
+ * Requires Config#ktls_tx = true BEFORE the handshake: the key material
+ * is captured during it, and enabling it also disables session tickets
+ * so that nothing is written under the application keys before handover
+ * and rec_seq is exactly 0.
+ *
+ * RULES AFTER A SUCCESSFUL CALL, both of which corrupt the stream if
+ * broken, because the kernel now owns the sequence number:
+ *   - OpenSSL must never write on this connection again. No
+ *     mrb_tls_write_memory, and no mrb_tls_shutdown_memory - the
+ *     close_notify would carry a stale sequence.
+ *   - RX is unaffected and stays with OpenSSL for the connection's
+ *     life; keep feeding it as before.
+ *
+ * A TLS 1.3 KeyUpdate from the peer asks for a server key the kernel
+ * does not have. Until TX rekey is wired, a caller that sees one must
+ * close the connection. */
+
+#define MRB_TLS_KTLS_AES_GCM_128       1
+#define MRB_TLS_KTLS_AES_GCM_256       2
+#define MRB_TLS_KTLS_CHACHA20_POLY1305 3
+
+typedef struct mrb_tls_ktls_tx {
+  int cipher;                 /* MRB_TLS_KTLS_* */
+  int version;                /* 0x0304 = TLS 1.3 */
+  unsigned char key[32];
+  size_t key_len;             /* 16 or 32 */
+  unsigned char iv[12];       /* full derived nonce; split 4 + 8 */
+  size_t iv_len;              /* always 12 */
+  unsigned char rec_seq[8];   /* 0 for a TLS 1.3 handover */
+} mrb_tls_ktls_tx_t;
+
+/* 0 on success, -1 if unavailable - not enabled before the handshake,
+ * handshake not finished, not TLS 1.3, or an unsupported cipher. Never
+ * raises: a caller that cannot get this simply keeps using
+ * mrb_tls_write_memory. */
+MRB_API int mrb_tls_ktls_tx_params(mrb_state *mrb, mrb_value conn, mrb_tls_ktls_tx_t *out);
+
 MRB_END_DECL
 
 #endif

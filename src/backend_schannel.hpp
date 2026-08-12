@@ -39,7 +39,12 @@
 //
 // Still missing, all of it required before this is worth building:
 //   - EncryptMessage / DecryptMessage
-//   - the eight MRB_API functions from include/mruby/tls.h
+//   - the MRB_API functions from include/mruby/tls.h, with one
+//     exception: mrb_tls_ktls_tx_params returns -1 here and always
+//     will. Windows has no kernel TLS - no SOL_TLS, no TCP_ULP, nothing
+//     Schannel can hand a record layer to - so "unavailable" is the
+//     permanent and correct answer. Callers already read -1 as "keep
+//     encrypting in userspace", which is what Windows does regardless.
 //   - Tls::Context  (read/write/handshake/close, + _nonblock, version,
 //                    cipher, configure, reset)
 //   - Tls::Client   (_connect, connect_fds, connect_socket)
