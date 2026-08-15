@@ -66,6 +66,37 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+/* LibreSSL, where a distribution ships it as the system TLS.
+ *
+ * It is NOT a fork of OpenSSL 3 - it left at 1.0.1g in 2014 and its API
+ * tracks roughly 1.1.1 with selected 3.x additions, so its own 4.x
+ * version numbering says nothing about which OpenSSL it resembles. That
+ * is exactly why the build refuses to guess from pkg-config's version
+ * alone and reads opensslv.h for LIBRESSL_VERSION_NUMBER instead.
+ *
+ * The gap turned out to be one symbol, measured rather than assumed: of
+ * the 89 OpenSSL names this backend uses, LibreSSL 4.3.2 is missing
+ * three, and two of those three are only mentioned in comments.
+ *
+ *   SSL_OP_ENABLE_KTLS                  already behind #ifdef below
+ *   SSL_R_UNEXPECTED_EOF_WHILE_READING  named in prose, never called
+ *   SSL_get1_peer_certificate           this, and only this
+ *
+ * The rename is semantically identical, which is what makes a #define
+ * honest here rather than a shim: OpenSSL 3.0 renamed
+ * SSL_get_peer_certificate to spell out the "1" convention it always
+ * obeyed - the caller owns a reference and must X509_free it. LibreSSL
+ * kept the old name and the same ownership rule.
+ *
+ * WHAT THIS DOES NOT ESTABLISH: that every name which EXISTS also
+ * behaves the same. A header grep cannot see a function that accepts an
+ * argument and ignores it, and SSL_CTX_set_ciphersuites is the one to
+ * distrust - a stub would leave the TLS 1.3 cipher list unconfigured
+ * while the build stays green. Only the test suite answers that. */
+#ifdef LIBRESSL_VERSION_NUMBER
+#define SSL_get1_peer_certificate SSL_get_peer_certificate
+#endif
+
 #include <errno.h>
 #include <string.h>
 

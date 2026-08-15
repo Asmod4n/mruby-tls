@@ -61,65 +61,78 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
     end
   end
 
-  unless system('pkg-config --atleast-version=3.0 libssl', out: File::NULL, err: File::NULL)
-    have = `pkg-config --modversion libssl 2>/dev/null`.strip
-    hint =
-      case RbConfig::CONFIG['host_os']
-      when /darwin/ then 'brew install openssl@3'
-      when /linux/  then "install your distribution's OpenSSL development package " \
-                         '(libssl-dev, openssl-devel, libopenssl-devel)'
-      else 'install OpenSSL 3.0 or newer and put its .pc files on PKG_CONFIG_PATH'
-      end
-    found = have.empty? ? ' (pkg-config found none)' : ", found #{have}"
-    raise "mruby-tls needs OpenSSL >= 3.0#{found}. Try: #{hint}"
-  end
-
-  # LibreSSL answers to `libssl.pc` too, and its own release numbering
-  # passed 3.0 years ago - so the `--atleast-version=3.0 libssl` check
-  # above, written to mean "OpenSSL 3.0 or newer", is satisfied by any
-  # LibreSSL from 3.0 on. The build then gets hundreds of files in before
-  # failing on SSL_get1_peer_certificate, an OpenSSL 3.0 rename that
-  # LibreSSL still spells SSL_get_peer_certificate. A compile error in a
-  # file nobody was editing is a terrible way to find out which TLS
-  # library you are building against.
+  # WHICH LIBRARY, BEFORE WHICH VERSION - because the version alone cannot
+  # tell them apart. LibreSSL answers to libssl.pc as well and numbers its
+  # own releases 3.x and 4.x, so a plain `--atleast-version=3.0 libssl` is
+  # satisfied by either one while meaning something different about each.
   #
-  # The vendor is not something pkg-config reports, so the header is
-  # asked instead: an opensslv.h defines LIBRESSL_VERSION_NUMBER if and
-  # only if it is LibreSSL's.
-  #
-  # This rejects rather than shimming. Supporting LibreSSL is a port, not
-  # one symbol - SSL_OP_ENABLE_KTLS, one of the two reasons this gem is
-  # on OpenSSL at all, does not exist there either.
+  # pkg-config does not report a vendor, so the header is asked instead:
+  # opensslv.h defines LIBRESSL_VERSION_NUMBER if and only if it is
+  # LibreSSL's.
   incdirs = `pkg-config --cflags-only-I libssl 2>/dev/null`.split
                                                            .grep(/\A-I/) { |f| f[2..] }
   incdirs += ['/usr/local/include', '/usr/include']
   header = incdirs.map { |d| File.join(d, 'openssl', 'opensslv.h') }.find { |f| File.readable?(f) }
-  if header && File.read(header).include?('LIBRESSL_VERSION_NUMBER')
-    prefix = File.dirname(File.dirname(File.dirname(header)))
-    modver = `pkg-config --modversion libssl 2>/dev/null`.strip
-    raise <<~MSG
-      mruby-tls found LibreSSL, not OpenSSL: #{header}
+  libressl = header && File.read(header).include?('LIBRESSL_VERSION_NUMBER')
+  modver = `pkg-config --modversion libssl 2>/dev/null`.strip
 
-      pkg-config reports libssl #{modver}, which passes this gem's ">= 3.0"
-      check because LibreSSL numbers its own releases 3.x and 4.x. It is a
-      different library, and this gem needs OpenSSL 3.0+.
+  if libressl
+    # ACCEPTED, where it used to be refused. The old text here said
+    # "supporting LibreSSL is a port, not one symbol". That was wrong, and
+    # measuring it rather than assuming is what settled it: of the 89
+    # OpenSSL names this gem uses, LibreSSL 4.3.2 is missing three, and two
+    # of those are only mentioned in comments. The single real gap is
+    # SSL_get1_peer_certificate, aliased in backend_openssl.hpp.
+    #
+    # The reason to accept rather than to keep refusing is not the size of
+    # the diff. A distribution that ships LibreSSL as its system TLS makes
+    # this every user's first build, and telling them to replace their
+    # distribution's TLS package to compile a gem is not an answer.
+    #
+    # 4.0 is the floor because 4.3.2 is what the symbol survey was run
+    # against. Older LibreSSL may well work - nobody has checked, and a
+    # named floor is a better failure than a compile error in a file the
+    # user was not editing.
+    unless system('pkg-config --atleast-version=4.0 libssl', out: File::NULL, err: File::NULL)
+      raise <<~MSG
+        mruby-tls found LibreSSL #{modver}, and needs >= 4.0.
 
-      Something has put a LibreSSL prefix (#{prefix}) ahead of the system
-      OpenSSL in pkg-config's search order. To build against the system one
-      without removing anything:
+        Header: #{header}
 
-        PKG_CONFIG_PATH=$(pkg-config --variable=pcfiledir openssl) rake
-
-      To see what is being picked up and where it came from:
-
-        pkg-config --variable=prefix libssl
-        pkg-config --debug libssl 2>&1 | grep -i 'looking\\|found'
-    MSG
+        LibreSSL is supported, but only 4.x has been verified against this
+        gem's symbol requirements. If you need an older one, run the symbol
+        survey and report what is missing rather than lowering this floor
+        blindly.
+      MSG
+    end
+  else
+    unless system('pkg-config --atleast-version=3.0 libssl', out: File::NULL, err: File::NULL)
+      hint =
+        case RbConfig::CONFIG['host_os']
+        when /darwin/ then 'brew install openssl@3'
+        when /linux/  then "install your distribution's OpenSSL development package " \
+                           '(libssl-dev, openssl-devel, libopenssl-devel)'
+        else 'install OpenSSL 3.0 or newer and put its .pc files on PKG_CONFIG_PATH'
+        end
+      found = modver.empty? ? ' (pkg-config found none)' : ", found #{modver}"
+      raise "mruby-tls needs OpenSSL >= 3.0#{found}. Try: #{hint}"
+    end
   end
+
+  # kTLS is a CAPABILITY, not a baseline. SSL_OP_ENABLE_KTLS does not exist
+  # in LibreSSL, and backend_openssl.hpp already guards it with #ifdef - so
+  # a LibreSSL build simply does not ask OpenSSL to install kTLS itself.
+  #
+  # That costs less than it sounds: the option only ever did anything on the
+  # socket-BIO path, and the memory-BIO path this gem exists for extracts key
+  # material through mrb_tls_ktls_tx_params and installs kTLS itself. Every
+  # symbol that path needs is present in LibreSSL.
+  spec.cc.defines << 'MRUBY_TLS_LIBRESSL' if libressl
 
   # Both, in this order: libssl needs libcrypto, and search_package does not
   # pass --static, so Requires.private is never expanded for us.
   unless spec.search_package('libssl') && spec.search_package('libcrypto')
-    raise 'mruby-tls: pkg-config reported OpenSSL >= 3.0 but could not report its flags'
+    raise "mruby-tls: pkg-config reported #{libressl ? 'LibreSSL' : 'OpenSSL'} " \
+          "#{modver} but could not report its flags"
   end
 end
