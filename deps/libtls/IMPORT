@@ -1,0 +1,15 @@
+libtls, imported unchanged from a LibreSSL release.
+
+    version:  4.3.2
+    source:   https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.3.2.tar.gz
+    files:    tls/*.[ch], tls/VERSION, tls/tls.sym, include/tls.h
+
+This branch holds the import and nothing else. Every file here carries
+the ISC notice of its OpenBSD authors, and none of them is edited on
+this branch.
+
+The port to other TLS libraries lives on the working branch, as commits
+on top of a merge from here. To take a newer libtls: check this branch
+out, replace these files from the new release, commit, and merge the
+branch into the working branch. What conflicts is then the port against
+what upstream changed, which is the question worth reading.
