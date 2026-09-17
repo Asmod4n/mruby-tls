@@ -121,22 +121,61 @@ tls_compat_load_verify_mem(SSL_CTX *ctx, void *buf, int len)
 	return ok;
 }
 
+/* What libtls asks for, and what this library has to be told instead.
+ *
+ * A table and not a chain of tests, because a claim that two spellings
+ * name the same thing is a claim a test must be able to walk. test/
+ * walks these rows and asks the library what each one actually offers.
+ *
+ * "exact" says the two name the same set of suites. Nothing here is
+ * approximate; a row that were would say so and name what it loses.
+ */
+struct cipher_row {
+	const char *asked;   /* what libtls passes, in LibreSSL's grammar */
+	const char *given;   /* what this library is told instead */
+	const char *why;
+};
+
+static const struct cipher_row cipher_rows[] = {
+	{
+		"TLSv1.3:TLSv1.2+AEAD+ECDHE:TLSv1.2+AEAD+DHE",
+		"ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20",
+		/* exact. "TLSv1.3" and "AEAD" are words only LibreSSL
+		 * parses. Here the TLS 1.3 suites are a list of their
+		 * own that this call does not touch, and its default is
+		 * those three suites, so naming the TLS 1.2 half leaves
+		 * the same set offered. */
+		"TLSv1.3 and AEAD are LibreSSL words; the 1.3 suites are a separate list here"
+	},
+};
+
+/* The other three sets libtls names - compat, legacy and all - are
+ * already plain grammar every library parses, so they have no row. */
+
+const struct cipher_row *tls_compat_cipher_rows(size_t *count);
+
+const struct cipher_row *
+tls_compat_cipher_rows(size_t *count)
+{
+	*count = sizeof(cipher_rows) / sizeof(cipher_rows[0]);
+	return cipher_rows;
+}
+
 int
 tls_compat_set_cipher_list(SSL_CTX *ctx, const char *list)
 {
-	/* "TLSv1.3" and "AEAD" are LibreSSL's words, and this is the one
-	 * string in libtls that uses them. It names the TLS 1.3 suites
-	 * plus the TLS 1.2 suites that are AEAD and use ECDHE or DHE.
-	 *
-	 * On OpenSSL the TLS 1.3 suites are a list of their own that
-	 * SSL_CTX_set_cipher_list does not touch, and its default is
-	 * those three suites. So naming the TLS 1.2 half here leaves the
-	 * same set of suites offered, and this is a translation rather
-	 * than a weakening. test/ciphers pins that. */
-	if (list != NULL &&
-	    strcmp(list, "TLSv1.3:TLSv1.2+AEAD+ECDHE:TLSv1.2+AEAD+DHE") == 0)
-		list = "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20";
+	size_t i;
 
+	if (list != NULL) {
+		for (i = 0; i < sizeof(cipher_rows) / sizeof(cipher_rows[0]); i++) {
+			if (strcmp(list, cipher_rows[i].asked) == 0) {
+				list = cipher_rows[i].given;
+				break;
+			}
+		}
+	}
+	/* Anything a caller wrote goes through untouched, and the
+	 * library judges it. */
 	return (SSL_CTX_set_cipher_list)(ctx, list);
 }
 
