@@ -61,8 +61,14 @@ constexpr cipher_row kRows[] = {
 bool expand_label(const EVP_MD *digest, std::span<const std::byte> secret, std::string_view label,
                   std::span<std::byte> out)
 {
-    const std::size_t hash_len = static_cast<std::size_t>(EVP_MD_get_size(digest));
-    if (hash_len == 0 || out.size() > 255 || secret.size() != hash_len)
+    /* EVP_MD_get_size answers an int and -1 on failure. Cast first and
+     * the -1 becomes SIZE_MAX, which no test below would catch on its
+     * own. */
+    const int digest_size = EVP_MD_get_size(digest);
+    if (digest_size <= 0)
+        return false;
+    const std::size_t hash_len = static_cast<std::size_t>(digest_size);
+    if (out.size() > 255 || secret.size() != hash_len)
         return false;
 
     /* The info structure the RFC spells: length, then "tls13 " and the
@@ -76,12 +82,23 @@ bool expand_label(const EVP_MD *digest, std::span<const std::byte> secret, std::
     info.push_back(0);
 
     /* HKDF-Expand with one block or two, which is what a key and an iv
-     * need: no output here is longer than two digests. */
+     * need: no output here is longer than two digests.
+     *
+     * Both buffers are sized to their largest before anything goes into
+     * them. A vector that grows abandons its old block to the allocator
+     * with the key still in it, and no destructor can reach that block
+     * afterwards - so the growth is what has to not happen. */
     std::vector<unsigned char> block;
+    std::vector<unsigned char> input;
+    block.reserve(EVP_MAX_MD_SIZE);
+    input.reserve(static_cast<std::size_t>(EVP_MAX_MD_SIZE) + info.size() + 1);
+    const scoped_wipe wipe_block(block);
+    const scoped_wipe wipe_input(input);
+
     std::size_t done = 0;
     unsigned char counter = 1;
     while (done < out.size()) {
-        std::vector<unsigned char> input;
+        input.clear();
         input.insert(input.end(), block.begin(), block.end());
         input.insert(input.end(), info.begin(), info.end());
         input.push_back(counter);
@@ -90,6 +107,8 @@ bool expand_label(const EVP_MD *digest, std::span<const std::byte> secret, std::
         block.assign(EVP_MAX_MD_SIZE, 0);
         if (HMAC(digest, secret.data(), static_cast<int>(secret.size()), input.data(), input.size(),
                  block.data(), &made) == nullptr)
+            return false;
+        if (made > block.size())
             return false;
         block.resize(made);
 
@@ -102,6 +121,12 @@ bool expand_label(const EVP_MD *digest, std::span<const std::byte> secret, std::
 }
 
 } // namespace
+
+void wipe_bytes(std::span<std::byte> bytes)
+{
+    if (!bytes.empty())
+        OPENSSL_cleanse(bytes.data(), bytes.size());
+}
 
 const cipher_row *cipher_row_of(int nid)
 {
@@ -136,11 +161,24 @@ bool write_handover_payload(const cipher_row &row, std::span<const std::byte> se
                             const EVP_MD *digest, std::uint64_t record_sequence,
                             std::vector<std::byte> &out)
 {
-    if (row.salt_size + row.iv_size != kTrafficIvSize)
+    /* One check, before the first byte is written, and it asks the whole
+     * question: do this row's parts add up to the payload it claims?
+     *
+     * The rows in this file are constexpr and every one of them sums
+     * exactly, but cipher_row and this function are both declared in
+     * the header, so a caller can hand over a row nobody checked. A
+     * test that runs after three memcpy have already gone past the end
+     * of the buffer is not a test. */
+    const std::size_t declared = sizeof(struct tls_crypto_info) + row.iv_size + row.key_size +
+                                 row.salt_size + kRecordSequenceSize;
+    if (row.salt_size + row.iv_size != kTrafficIvSize || declared != row.payload_size)
         return false;
 
     std::array<std::byte, kTrafficIvSize> iv{};
     std::vector<std::byte> key(row.key_size);
+    /* Both hold the traffic key from here until this returns. */
+    const scoped_wipe wipe_iv(iv);
+    const scoped_wipe wipe_key(key);
     if (!derive_traffic_key(digest, secret, key, iv))
         return false;
 
@@ -166,13 +204,11 @@ bool write_handover_payload(const cipher_row &row, std::span<const std::byte> se
 
     /* The sequence the kernel starts counting from, big endian, which
      * is how it sits on the wire. */
-    std::array<std::byte, 8> sequence{};
+    std::array<std::byte, kRecordSequenceSize> sequence{};
     for (std::size_t i = 0; i < sequence.size(); i++) {
         sequence[sequence.size() - 1 - i] =
             static_cast<std::byte>((record_sequence >> (8 * i)) & 0xff);
     }
-    if (at + sequence.size() > out.size())
-        return false;
     std::memcpy(std::next(out.data(), static_cast<std::ptrdiff_t>(at)), sequence.data(),
                 sequence.size());
     return true;

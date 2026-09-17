@@ -28,6 +28,10 @@
 #include <new>
 
 #include <openssl/err.h>
+#include <openssl/kdf.h>
+#include <openssl/rand.h>
+#include <openssl/params.h>
+#include <openssl/core_names.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -163,16 +167,153 @@ int servername_pick(SSL *ssl, int *alert, void *arg)
     }
     if (config->name_hook != nullptr) {
         bool abort = false;
-        mrb_tls_config *answer = config->name_hook(config->name_hook_ctx, host, &abort);
+        mrb_tls_config *answer = nullptr;
+        /* The hook is the caller's code and it runs inside OpenSSL's own
+         * C frames. An exception that escaped here would unwind through
+         * them, which is undefined - and this tree builds mruby with
+         * MRB_USE_CXX_EXCEPTION, so a hook that reaches Ruby is one
+         * raise away from exactly that. It becomes a clean refusal. */
+        try {
+            answer = config->name_hook(config->name_hook_ctx, host, &abort);
+        } catch (...) {
+            return SSL_TLSEXT_ERR_ALERT_FATAL;
+        }
         if (abort)
             return SSL_TLSEXT_ERR_ALERT_FATAL;
-        if (answer != nullptr)
+        /* A hook that answers a config with no context has answered
+         * nothing usable. Carrying on with the default certificate for
+         * a name the hook claimed would be a certificate nobody chose,
+         * so it is refused instead. */
+        if (answer != nullptr) {
+            if (!answer->ctx)
+                return SSL_TLSEXT_ERR_ALERT_FATAL;
             SSL_set_SSL_CTX(ssl, answer->ctx.get());
+        }
     }
     /* A name nobody claimed keeps the default certificate. The client
      * decides whether that is acceptable, which is its job and not
      * ours. */
     return SSL_TLSEXT_ERR_OK;
+}
+
+/* The ticket name the RFC 5077 format carries, and the width the
+ * library's own callback declares for it. */
+constexpr std::size_t kTicketNameSize = 16;
+
+/* A run of bytes wiped where the scope ends, whatever ends it. */
+struct wipe_at_scope_end {
+    std::vector<unsigned char> &held;
+    ~wipe_at_scope_end()
+    {
+        if (!held.empty())
+            OPENSSL_cleanse(held.data(), held.size());
+    }
+};
+
+/* Where the ticket key lives, so the callback can find it from the
+ * SSL_CTX the library hands it and from nothing else. */
+int ticket_config_index()
+{
+    static const int index = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    return index;
+}
+
+/* One caller's key becomes three, because a ticket needs a name, a
+ * cipher key and a MAC key, and using one run of bytes for all three
+ * would tie the authentication to the encryption. HKDF separates them
+ * by label, which is what it exists for. */
+bool derive_ticket_keys(mrb_tls_config *config, std::span<const unsigned char> given)
+{
+    EVP_KDF *kdf = EVP_KDF_fetch(nullptr, "HKDF", nullptr);
+    if (kdf == nullptr) {
+        fail_library(config->last, "HKDF is not available in this library");
+        return false;
+    }
+    EVP_KDF_CTX *ctx = EVP_KDF_CTX_new(kdf);
+    EVP_KDF_free(kdf);
+    if (ctx == nullptr) {
+        fail(config->last, MRB_TLS_ERR_MEMORY, "no memory to derive the ticket key");
+        return false;
+    }
+
+    /* The sizes are the library's: the name length the ticket format
+     * declares, and the key length of each algorithm the callback
+     * installs below. */
+    std::vector<unsigned char> derived(kTicketNameSize +
+                                       static_cast<std::size_t>(EVP_CIPHER_get_key_length(
+                                           EVP_aes_256_cbc())) +
+                                       static_cast<std::size_t>(EVP_MD_get_size(EVP_sha256())));
+
+    char digest[] = "SHA256";
+    char info[] = "mruby-tls session ticket key";
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, digest, 0),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY,
+                                          const_cast<unsigned char *>(given.data()), given.size()),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, info, sizeof info - 1),
+        OSSL_PARAM_construct_end()};
+    const int ok = EVP_KDF_derive(ctx, derived.data(), derived.size(), params);
+    EVP_KDF_CTX_free(ctx);
+    /* The derived run is copied into the config below and wiped here,
+     * on every exit, because a vector that held key material hands
+     * those bytes to the next allocation of its size. */
+    const wipe_at_scope_end guard{derived};
+    if (ok != 1) {
+        fail_library(config->last, "the ticket key could not be derived");
+        return false;
+    }
+
+    const std::size_t cipher_size =
+        static_cast<std::size_t>(EVP_CIPHER_get_key_length(EVP_aes_256_cbc()));
+    const auto whole = std::span<const unsigned char>(derived);
+    config->ticket_name.assign(whole.begin(), std::next(whole.begin(), kTicketNameSize));
+    const auto rest = whole.subspan(kTicketNameSize);
+    config->ticket_cipher_key.assign(rest.begin(), std::next(rest.begin(), cipher_size));
+    const auto mac = rest.subspan(cipher_size);
+    config->ticket_mac_key.assign(mac.begin(), mac.end());
+    return true;
+}
+
+/* The library asks for a key to seal a new ticket, or for the key that
+ * sealed the one a client sent back. Every process behind one address
+ * derived the same three from the same span, so a ticket from any of
+ * them opens in all of them. */
+int ticket_key_pick(SSL *ssl, unsigned char name[16], unsigned char iv[EVP_MAX_IV_LENGTH],
+                    EVP_CIPHER_CTX *cipher, EVP_MAC_CTX *mac, int sealing)
+{
+    auto *config = static_cast<mrb_tls_config *>(
+        SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), ticket_config_index()));
+    if (config == nullptr || config->ticket_name.empty())
+        return -1;
+
+    char digest[] = "SHA256";
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0),
+        OSSL_PARAM_construct_end()};
+
+    if (sealing == 0) {
+        /* A name that is not ours names another key. Zero is the
+         * library's word for "this ticket is not mine", and it starts
+         * a full handshake. */
+        if (!std::equal(config->ticket_name.begin(), config->ticket_name.end(), name))
+            return 0;
+    } else {
+        if (RAND_bytes(iv, EVP_CIPHER_get_iv_length(EVP_aes_256_cbc())) != 1)
+            return -1;
+        std::copy(config->ticket_name.begin(), config->ticket_name.end(), name);
+    }
+
+    if (EVP_MAC_init(mac, config->ticket_mac_key.data(), config->ticket_mac_key.size(), params) !=
+        1)
+        return -1;
+    const int ok = sealing != 0
+                       ? EVP_EncryptInit_ex(cipher, EVP_aes_256_cbc(), nullptr,
+                                            config->ticket_cipher_key.data(), iv)
+                       : EVP_DecryptInit_ex(cipher, EVP_aes_256_cbc(), nullptr,
+                                            config->ticket_cipher_key.data(), iv);
+    if (ok != 1)
+        return -1;
+    return 1;
 }
 
 } // namespace
@@ -240,7 +381,11 @@ mrb_tls_config *mrb_tls_config_new(void)
 
 void mrb_tls_config_free(mrb_tls_config *config)
 {
-    delete config;
+    /* One reference given up, not a delete. A session that still holds
+     * one keeps the config - and the pointers the SSL_CTX has into it -
+     * alive until it is itself freed. */
+    if (config != nullptr && config->references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        delete config;
 }
 
 const mrb_tls_error *mrb_tls_config_error(const mrb_tls_config *config)
@@ -250,9 +395,13 @@ const mrb_tls_error *mrb_tls_config_error(const mrb_tls_config *config)
 
 mrb_tls_status mrb_tls_config_set_certificate(mrb_tls_config *config, const char *pem, size_t len)
 {
-    if (config == nullptr || pem == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (pem == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the buffer is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     BIO *bio = BIO_new_mem_buf(pem, static_cast<int>(len));
     if (bio == nullptr) {
         fail(config->last, MRB_TLS_ERR_MEMORY, "no memory for the certificate");
@@ -290,9 +439,13 @@ mrb_tls_status mrb_tls_config_set_certificate(mrb_tls_config *config, const char
 
 mrb_tls_status mrb_tls_config_set_certificate_file(mrb_tls_config *config, const char *path)
 {
-    if (config == nullptr || path == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (path == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the path is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (SSL_CTX_use_certificate_chain_file(config->ctx.get(), path) != 1) {
         fail_library(config->last, "the certificate file was refused");
         return MRB_TLS_FAILED;
@@ -302,9 +455,13 @@ mrb_tls_status mrb_tls_config_set_certificate_file(mrb_tls_config *config, const
 
 mrb_tls_status mrb_tls_config_set_private_key(mrb_tls_config *config, const char *pem, size_t len)
 {
-    if (config == nullptr || pem == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (pem == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the buffer is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     BIO *bio = BIO_new_mem_buf(pem, static_cast<int>(len));
     if (bio == nullptr) {
         fail(config->last, MRB_TLS_ERR_MEMORY, "no memory for the private key");
@@ -331,9 +488,13 @@ mrb_tls_status mrb_tls_config_set_private_key(mrb_tls_config *config, const char
 
 mrb_tls_status mrb_tls_config_set_private_key_file(mrb_tls_config *config, const char *path)
 {
-    if (config == nullptr || path == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (path == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the path is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (SSL_CTX_use_PrivateKey_file(config->ctx.get(), path, SSL_FILETYPE_PEM) != 1) {
         fail_library(config->last, "the private key file was refused");
         return MRB_TLS_FAILED;
@@ -349,9 +510,13 @@ mrb_tls_status mrb_tls_config_add_named_certificate(mrb_tls_config *config, cons
                                                     const char *cert_pem, size_t cert_len,
                                                     const char *key_pem, size_t key_len)
 {
-    if (config == nullptr || host == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (host == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the host name is a null pointer");
+        return MRB_TLS_FAILED;
+    }
 
     /* A named certificate is a context of its own, because that is what
      * SSL_set_SSL_CTX swaps. It inherits nothing, so it is given the
@@ -391,9 +556,13 @@ mrb_tls_status mrb_tls_config_add_named_certificate(mrb_tls_config *config, cons
 
 mrb_tls_status mrb_tls_config_set_trust_file(mrb_tls_config *config, const char *path)
 {
-    if (config == nullptr || path == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (path == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the path is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (SSL_CTX_load_verify_locations(config->ctx.get(), path, nullptr) != 1) {
         fail_library(config->last, "the trust file was refused");
         return MRB_TLS_FAILED;
@@ -403,9 +572,13 @@ mrb_tls_status mrb_tls_config_set_trust_file(mrb_tls_config *config, const char 
 
 mrb_tls_status mrb_tls_config_set_trust_path(mrb_tls_config *config, const char *path)
 {
-    if (config == nullptr || path == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (path == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the path is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (SSL_CTX_load_verify_locations(config->ctx.get(), nullptr, path) != 1) {
         fail_library(config->last, "the trust directory was refused");
         return MRB_TLS_FAILED;
@@ -420,6 +593,7 @@ void mrb_tls_config_set_verify(mrb_tls_config *config, bool chain, bool name, bo
     config->verify_chain = chain;
     config->verify_name = name;
     config->verify_time = time;
+    config->verify_stated = true;
 }
 
 void mrb_tls_config_set_verify_depth(mrb_tls_config *config, int depth)
@@ -438,9 +612,13 @@ mrb_tls_status mrb_tls_config_set_protocols(mrb_tls_config *config, uint32_t mas
 
 mrb_tls_status mrb_tls_config_set_ciphers(mrb_tls_config *config, const char *list)
 {
-    if (config == nullptr || list == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (list == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the cipher list is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     /* Two lists, because TLS 1.3 names its suites in one and everything
      * older in the other. A name the library does not know fails here
      * rather than at the handshake. */
@@ -455,9 +633,13 @@ mrb_tls_status mrb_tls_config_set_ciphers(mrb_tls_config *config, const char *li
 
 mrb_tls_status mrb_tls_config_set_groups(mrb_tls_config *config, const char *list)
 {
-    if (config == nullptr || list == nullptr)
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (list == nullptr) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the group list is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (SSL_CTX_set1_groups_list(config->ctx.get(), list) != 1) {
         fail_library(config->last, "the group list was refused");
         return MRB_TLS_FAILED;
@@ -468,9 +650,13 @@ mrb_tls_status mrb_tls_config_set_groups(mrb_tls_config *config, const char *lis
 mrb_tls_status mrb_tls_config_set_alpn(mrb_tls_config *config, const char *const *names,
                                        size_t count)
 {
-    if (config == nullptr || (names == nullptr && count > 0))
+    if (config == nullptr)
         return MRB_TLS_FAILED;
     config->last.clear();
+    if (names == nullptr && count > 0) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the protocol list is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     if (!pack_alpn(names, count, config->alpn, config->last))
         return MRB_TLS_FAILED;
 
@@ -490,6 +676,40 @@ mrb_tls_status mrb_tls_config_set_tickets(mrb_tls_config *config, size_t count)
         return MRB_TLS_FAILED;
     config->last.clear();
     SSL_CTX_set_num_tickets(config->ctx.get(), count);
+    return MRB_TLS_OK;
+}
+
+/* One key for every process behind one address, so a ticket issued by
+ * any of them resumes at any other. Without it the library makes its
+ * own key per process and a ticket resumes only where it was issued. */
+mrb_tls_status mrb_tls_config_set_ticket_key(mrb_tls_config *config, const void *key, size_t len)
+{
+    if (config == nullptr)
+        return MRB_TLS_FAILED;
+    config->last.clear();
+    if (key == nullptr || len == 0) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT, "the ticket key is empty");
+        return MRB_TLS_FAILED;
+    }
+    /* Short of the digest the derivation runs on, the key has less
+     * entropy than the tickets it seals claim. That is a caller's
+     * mistake and it is refused rather than accepted quietly. */
+    const auto wanted = static_cast<std::size_t>(EVP_MD_get_size(EVP_sha256()));
+    if (len < wanted) {
+        fail(config->last, MRB_TLS_ERR_ARGUMENT,
+             "the ticket key is shorter than the digest it is derived through");
+        return MRB_TLS_FAILED;
+    }
+
+    const std::span<const unsigned char> given(static_cast<const unsigned char *>(key), len);
+    if (!derive_ticket_keys(config, given))
+        return MRB_TLS_FAILED;
+
+    SSL_CTX_set_ex_data(config->ctx.get(), ticket_config_index(), config);
+    if (SSL_CTX_set_tlsext_ticket_key_evp_cb(config->ctx.get(), ticket_key_pick) != 1) {
+        fail_library(config->last, "the ticket key callback was refused");
+        return MRB_TLS_FAILED;
+    }
     return MRB_TLS_OK;
 }
 
@@ -519,17 +739,32 @@ void mrb_tls_config_set_server_name_hook(mrb_tls_config *config,
 namespace
 {
 
+/* After a shrink the session has no SSL left, and the kernel holds the
+ * records. Every path that would call into the library asks this
+ * first, so a call in that state is a named refusal rather than a null
+ * dereference. */
+bool library_is_held(mrb_tls_session *session)
+{
+    if (session->ssl)
+        return true;
+    fail(session->last, MRB_TLS_ERR_STATE,
+         "this session gave up its library state, and the kernel holds the records");
+    return false;
+}
+
 /* The three axes, asked after the handshake rather than during it.
  *
  * OpenSSL can answer the chain by itself, but not "and what would the
  * result have been ignoring the dates" once it has recorded an expiry,
  * and not the name against a host it was never told. So the chain comes
  * from the library, the name from X509_check_host, and the dates are
- * waived before the handshake when they are not wanted. */
+ * waived before the handshake when they are not wanted.
+ *
+ * A server runs this too, on the certificate the client presented. The
+ * name axis is a client's question - it checks the host a client asked
+ * for - so a server session carries only the chain axis. */
 bool verify_peer(mrb_tls_session *session)
 {
-    mrb_tls_config *config = nullptr;
-    (void)config;
     if (!session->verify_chain && !session->verify_name)
         return true;
 
@@ -555,7 +790,11 @@ bool verify_peer(mrb_tls_session *session)
                  "the name was to be checked and no server name was set");
             ok = false;
         } else if (X509_check_host(peer, session->server_name.data(), session->server_name.size(),
-                                   0, nullptr) != 1) {
+                                   X509_CHECK_FLAG_NEVER_CHECK_SUBJECT, nullptr) != 1) {
+            /* The subject Common Name is not a host name. RFC 6125 4.1
+             * deprecated reading it as one, and every browser stopped
+             * years ago, so a certificate without a subjectAltName does
+             * not match here either. */
             fail(session->last, MRB_TLS_ERR_VERIFY,
                  "the peer's certificate is for another name than " + session->server_name);
             ok = false;
@@ -642,31 +881,68 @@ mrb_tls_status perform_handover(mrb_tls_session *session)
             continue;
         }
 
-        const bool first = session->step == 0;
-        if (first && err == EEXIST) {
-            /* Attached earlier, by the caller, on purpose. */
-            session->step++;
-            continue;
+        /* What the answer means depends on WHICH option was refused. */
+        switch (step.what) {
+        case handover_step::kind::attach_module:
+            if (err == EEXIST) {
+                /* Attached already, which is what a reactor does at
+                 * accept time so the cost lands off the handshake. */
+                session->step++;
+                continue;
+            }
+            if (err == ENOENT || err == EPERM || err == EOPNOTSUPP || err == ENOTCONN) {
+                stay_in_userspace(session, err == ENOENT
+                                               ? "this kernel has no tls module to attach"
+                                               : "this process may not attach the tls module");
+                return MRB_TLS_OK;
+            }
+            break;
+
+        case handover_step::kind::send_key:
+            /* Nothing has been handed over yet, so stepping back is
+             * still free. An older kernel with the module but without
+             * this cipher says so here, and the ULP alone forwards
+             * bytes unchanged. */
+            if (session->mode != MRB_TLS_MODE_KERNEL &&
+                (err == EINVAL || err == ENOPROTOOPT || err == EOPNOTSUPP)) {
+                stay_in_userspace(session, "this kernel does not take the negotiated cipher");
+                return MRB_TLS_OK;
+            }
+            /* On a session the kernel already holds, a refused send key
+             * is not something to fall back from: the kernel is still
+             * encrypting with the key this side has just stopped
+             * using. Saying userspace here would send plaintext through
+             * a path that encrypts it a second time. */
+            fail(session->last, MRB_TLS_ERR_KERNEL,
+                 session->mode == MRB_TLS_MODE_KERNEL
+                     ? "the kernel refused a new send key while it still holds the old one"
+                     : "the kernel refused the send key",
+                 err);
+            return MRB_TLS_FAILED;
+
+        case handover_step::kind::receive_key:
+            /* The send key is in the kernel by now, whichever plan this
+             * is. There is no way back from here. */
+            fail(session->last, MRB_TLS_ERR_KERNEL,
+                 "the kernel took the send key and refused the receive key", err);
+            return MRB_TLS_FAILED;
         }
-        if (first && (err == ENOENT || err == EPERM || err == EOPNOTSUPP || err == ENOTCONN)) {
-            stay_in_userspace(session, err == ENOENT
-                                           ? "this kernel has no tls module to attach"
-                                           : "this process may not attach the tls module");
-            return MRB_TLS_OK;
-        }
-        if (session->step == 1 && (err == EINVAL || err == ENOPROTOOPT || err == EOPNOTSUPP)) {
-            /* An older kernel with the module but without this cipher.
-             * The ULP alone forwards bytes unchanged, so nothing is
-             * broken; the records stay here. */
-            stay_in_userspace(session, "this kernel does not take the negotiated cipher");
-            return MRB_TLS_OK;
-        }
+
         fail(session->last, MRB_TLS_ERR_KERNEL,
-             session->step == 2
-                 ? "the kernel took the send key and refused the receive key"
-                 : "the kernel refused the record layer it had begun to take",
-             err);
+             "the kernel refused the record layer it had begun to take", err);
         return MRB_TLS_FAILED;
+    }
+
+    /* Every step went through. Only now do the secrets a rekey derived
+     * become this session's, because only now do they match what the
+     * kernel holds. */
+    if (session->secret_pending) {
+        session->secret[0] = std::move(session->pending_secret[0]);
+        session->secret[1] = std::move(session->pending_secret[1]);
+        session->secret_pending = false;
+        session->tx_at_last_read = session->tx_walk.records;
+        session->tx_at_done = session->tx_walk.records;
+        session->rx_at_done = session->rx_walk.records;
     }
     session->mode = MRB_TLS_MODE_KERNEL;
     session->fallback.clear();
@@ -719,9 +995,10 @@ bool plan_handover(mrb_tls_session *session)
     const char ulp[] = "tls";
     std::vector<std::byte> ulp_bytes(sizeof ulp);
     std::memcpy(ulp_bytes.data(), ulp, sizeof ulp);
-    session->plan.push_back({IPPROTO_TCP, TCP_ULP, std::move(ulp_bytes)});
-    session->plan.push_back({SOL_TLS, TLS_TX, std::move(tx)});
-    session->plan.push_back({SOL_TLS, TLS_RX, std::move(rx)});
+    session->plan.push_back(
+        {handover_step::kind::attach_module, IPPROTO_TCP, TCP_ULP, std::move(ulp_bytes)});
+    session->plan.push_back({handover_step::kind::send_key, SOL_TLS, TLS_TX, std::move(tx)});
+    session->plan.push_back({handover_step::kind::receive_key, SOL_TLS, TLS_RX, std::move(rx)});
     session->step = 0;
     return true;
 }
@@ -758,7 +1035,12 @@ mrb_tls_status decide_mode(mrb_tls_session *session)
     }
 
 #ifdef TLS_KERNEL_RECORDS
-    if (!plan_handover(session))
+    /* A plan already in flight is resumed at its own step. Rebuilding
+     * it would apply the send key a second time, and a kernel that
+     * already holds one answers EBUSY - which is no kind of fallback
+     * and would kill the session. This is the whole reason an
+     * asynchronous socket option can work at all. */
+    if (session->plan.empty() && !plan_handover(session))
         return MRB_TLS_OK; /* the reason is recorded */
     return perform_handover(session);
 #else
@@ -784,15 +1066,22 @@ mrb_tls_session *mrb_tls_session_new(mrb_tls_config *config, mrb_tls_role role,
 
     session->io = *io;
     session->role = role;
-    session->verify_chain = config->verify_chain;
-    session->verify_name = config->verify_name;
+    /* A server judges a client certificate only where the caller asked
+     * for it. A client judges by default. */
+    session->verify_chain =
+        config->verify_chain && (role == MRB_TLS_CLIENT || config->verify_stated);
+    /* The name axis checks the host a client asked for, so it belongs
+     * to a client session and to no other. */
+    session->verify_name = role == MRB_TLS_CLIENT && config->verify_name;
 
-    /* A reference of our own, so the caller may free the config while
-     * this session lives. */
-    SSL_CTX_up_ref(config->ctx.get());
-    session->ctx.reset(config->ctx.get());
+    /* A reference to the whole config, not only to its SSL_CTX. The
+     * context holds raw pointers into the config for the server-name
+     * and ALPN callbacks, so keeping the context alive is not enough to
+     * keep those valid. */
+    config->references.fetch_add(1, std::memory_order_relaxed);
+    session->config = config;
 
-    session->ssl.reset(SSL_new(session->ctx.get()));
+    session->ssl.reset(SSL_new(config->ctx.get()));
     if (!session->ssl) {
         delete session;
         return nullptr;
@@ -807,9 +1096,20 @@ mrb_tls_session *mrb_tls_session_new(mrb_tls_config *config, mrb_tls_role role,
         delete session;
         return nullptr;
     }
-    /* One BIO for both directions, and the SSL owns it from here. */
-    BIO_up_ref(bio);
+    /* One BIO for both directions, and the SSL owns it from here.
+     *
+     * No BIO_up_ref: SSL_set_bio consumes exactly ONE reference when
+     * the read and the write BIO are the same object. An up_ref here
+     * would leave a reference nobody drops, which on a server is one
+     * leaked BIO per accepted connection. */
     SSL_set_bio(session->ssl.get(), bio, bio);
+
+    /* A server that was told to verify has to ask for the certificate
+     * first: without this the client sends none, and the check after
+     * the handshake would have nothing to judge. The result is still
+     * ours to read - OpenSSL is told to collect it and not to act. */
+    if (role == MRB_TLS_SERVER && session->verify_chain)
+        SSL_set_verify(session->ssl.get(), SSL_VERIFY_PEER, nullptr);
 
     if (role == MRB_TLS_SERVER)
         SSL_set_accept_state(session->ssl.get());
@@ -820,7 +1120,20 @@ mrb_tls_session *mrb_tls_session_new(mrb_tls_config *config, mrb_tls_role role,
 
 void mrb_tls_session_free(mrb_tls_session *session)
 {
+    if (session == nullptr)
+        return;
+    /* The BIO may outlive this object: it is freed from SSL_free, which
+     * runs inside the destructor below. Clear the back pointer first so
+     * a callback that did run would find nothing to read. */
+    if (session->ssl) {
+        BIO *bio = SSL_get_rbio(session->ssl.get());
+        if (bio != nullptr)
+            tls_bio_forget_session(bio);
+    }
+    mrb_tls_config *config = session->config;
     delete session;
+    if (config != nullptr && config->references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        delete config;
 }
 
 const mrb_tls_error *mrb_tls_session_error(const mrb_tls_session *session)
@@ -847,6 +1160,8 @@ mrb_tls_status mrb_tls_session_set_server_name(mrb_tls_session *session, const c
         fail(session->last, MRB_TLS_ERR_STATE, "the server name is set before the handshake");
         return MRB_TLS_FAILED;
     }
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     session->server_name = host;
     if (session->role == MRB_TLS_CLIENT &&
         SSL_set_tlsext_host_name(session->ssl.get(), session->server_name.c_str()) != 1) {
@@ -869,6 +1184,8 @@ mrb_tls_status mrb_tls_session_set_protocols(mrb_tls_session *session, uint32_t 
     }
     const int low = (mask & MRB_TLS_PROTOCOL_TLSv1_2) != 0 ? TLS1_2_VERSION : TLS1_3_VERSION;
     const int high = (mask & MRB_TLS_PROTOCOL_TLSv1_3) != 0 ? TLS1_3_VERSION : TLS1_2_VERSION;
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     if (SSL_set_min_proto_version(session->ssl.get(), low) != 1 ||
         SSL_set_max_proto_version(session->ssl.get(), high) != 1) {
         fail_library(session->last, "the protocol range was refused");
@@ -899,7 +1216,7 @@ mrb_tls_status mrb_tls_session_handshake(mrb_tls_session *session)
         SSL_get0_alpn_selected(session->ssl.get(), &alpn, &alpn_len);
         session->alpn_name.assign(reinterpret_cast<const char *>(alpn), alpn_len);
 
-        if (session->role == MRB_TLS_CLIENT && !verify_peer(session))
+        if (!verify_peer(session))
             return MRB_TLS_FAILED;
         /* Nothing arrives under the application key before this point,
          * and a client writes nothing under it either, so both counts
@@ -953,6 +1270,8 @@ mrb_tls_status mrb_tls_session_read(mrb_tls_session *session, void *buf, size_t 
         }
     }
 
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     const int result = SSL_read_ex(session->ssl.get(), buf, cap, got);
     if (result == 1)
         return MRB_TLS_OK;
@@ -988,6 +1307,8 @@ mrb_tls_status mrb_tls_session_write(mrb_tls_session *session, const void *buf, 
         }
     }
 
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     const int result = SSL_write_ex(session->ssl.get(), buf, len, put);
     if (result == 1)
         return MRB_TLS_OK;
@@ -1019,10 +1340,16 @@ mrb_tls_status mrb_tls_session_close(mrb_tls_session *session)
         const mrb_tls_io_status status = io.write_record(io.ctx, 21, bye, sizeof bye, &put, &err);
         if (status == MRB_TLS_IO_AGAIN)
             return MRB_TLS_AGAIN_WRITE;
+        if (status == MRB_TLS_IO_FAILED) {
+            fail(session->last, MRB_TLS_ERR_IO, "the close alert could not be written", err);
+            return MRB_TLS_FAILED;
+        }
         session->phase = phase::closed;
-        return status == MRB_TLS_IO_FAILED ? MRB_TLS_FAILED : MRB_TLS_OK;
+        return MRB_TLS_OK;
     }
 
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     const int result = SSL_shutdown(session->ssl.get());
     if (result < 0) {
         const mrb_tls_status status = want_of(session, result);
@@ -1044,8 +1371,13 @@ mrb_tls_status mrb_tls_session_close(mrb_tls_session *session)
 mrb_tls_status mrb_tls_session_control_record(mrb_tls_session *session, unsigned char type,
                                               const void *payload, size_t len)
 {
-    if (session == nullptr || (payload == nullptr && len > 0))
+    if (session == nullptr)
         return MRB_TLS_FAILED;
+    session->last.clear();
+    if (payload == nullptr && len > 0) {
+        fail(session->last, MRB_TLS_ERR_ARGUMENT, "the record payload is a null pointer");
+        return MRB_TLS_FAILED;
+    }
     const auto *bytes = static_cast<const unsigned char *>(payload);
 
     if (type == 21) { /* alert */
@@ -1054,7 +1386,10 @@ mrb_tls_status mrb_tls_session_control_record(mrb_tls_session *session, unsigned
                                                       "bytes");
             return MRB_TLS_FAILED;
         }
-        if (bytes[1] == 0) { /* close_notify */
+        /* RFC 8446 6.1: close_notify is a warning. A peer that sends
+         * level fatal with description 0 has not closed politely, and
+         * reading it as an orderly end would let it pass for one. */
+        if (bytes[0] == 1 && bytes[1] == 0) { /* warning, close_notify */
             session->phase = phase::closed;
             return MRB_TLS_CLOSED;
         }
@@ -1102,6 +1437,8 @@ mrb_tls_status mrb_tls_session_rekey(mrb_tls_session *session)
         return MRB_TLS_FAILED;
     }
     if (session->mode == MRB_TLS_MODE_USERSPACE) {
+        if (!library_is_held(session))
+            return MRB_TLS_FAILED;
         if (SSL_key_update(session->ssl.get(), SSL_KEY_UPDATE_NOT_REQUESTED) != 1) {
             fail_library(session->last, "the library refused a key update");
             return MRB_TLS_FAILED;
@@ -1115,31 +1452,43 @@ mrb_tls_status mrb_tls_session_rekey(mrb_tls_session *session)
         return MRB_TLS_FAILED;
     }
     const int send_at = session->role == MRB_TLS_SERVER ? 1 : 0;
+
+    /* Derived into a holding place, not into the session. A step that
+     * answers again, or fails, must leave this side on the keys the
+     * kernel still holds - otherwise the retry ratchets a second time
+     * and the two ends are a generation apart for good. */
+    std::array<std::vector<std::byte>, 2> next;
     for (int which = 0; which < 2; which++) {
-        std::vector<std::byte> next(session->secret[which].size());
-        if (!next_traffic_secret(session->digest, session->secret[which], next)) {
+        next[which].resize(session->secret[which].size());
+        if (!next_traffic_secret(session->digest, session->secret[which], next[which])) {
+            wipe_bytes(next[0]);
+            wipe_bytes(next[1]);
             fail(session->last, MRB_TLS_ERR_LIBRARY, "the next traffic secret could not be "
                                                      "derived");
             return MRB_TLS_FAILED;
         }
-        session->secret[which] = std::move(next);
     }
-    /* A new key starts its own count, so every walker is read as being
-     * at zero from here, whichever rule the role uses. */
-    session->tx_at_last_read = session->tx_walk.records;
-    session->tx_at_done = session->tx_walk.records;
-    session->rx_at_done = session->rx_walk.records;
+
     std::vector<std::byte> tx;
     std::vector<std::byte> rx;
-    if (!write_handover_payload(*session->row, session->secret[send_at], session->digest, 0, tx) ||
-        !write_handover_payload(*session->row, session->secret[1 - send_at], session->digest, 0,
-                                rx)) {
+    if (!write_handover_payload(*session->row, next[send_at], session->digest, 0, tx) ||
+        !write_handover_payload(*session->row, next[1 - send_at], session->digest, 0, rx)) {
+        wipe_bytes(next[0]);
+        wipe_bytes(next[1]);
+        wipe_bytes(tx);
+        wipe_bytes(rx);
         fail(session->last, MRB_TLS_ERR_LIBRARY, "the new traffic keys could not be written");
         return MRB_TLS_FAILED;
     }
+
+    session->pending_secret[0] = std::move(next[0]);
+    session->pending_secret[1] = std::move(next[1]);
+    session->secret_pending = true;
+    for (handover_step &old_step : session->plan)
+        wipe_bytes(old_step.bytes);
     session->plan.clear();
-    session->plan.push_back({SOL_TLS, TLS_TX, std::move(tx)});
-    session->plan.push_back({SOL_TLS, TLS_RX, std::move(rx)});
+    session->plan.push_back({handover_step::kind::send_key, SOL_TLS, TLS_TX, std::move(tx)});
+    session->plan.push_back({handover_step::kind::receive_key, SOL_TLS, TLS_RX, std::move(rx)});
     session->step = 0;
     return perform_handover(session);
 #else
@@ -1205,8 +1554,12 @@ mrb_tls_status mrb_tls_session_shrink(mrb_tls_session *session)
              "a session that keeps its own records needs the library it would drop");
         return MRB_TLS_FAILED;
     }
+    if (session->ssl) {
+        BIO *bio = SSL_get_rbio(session->ssl.get());
+        if (bio != nullptr)
+            tls_bio_forget_session(bio);
+    }
     session->ssl.reset();
-    session->ctx.reset();
     return MRB_TLS_OK;
 }
 
@@ -1219,6 +1572,8 @@ mrb_tls_status mrb_tls_session_resume(mrb_tls_session *session, const void *der,
         fail(session->last, MRB_TLS_ERR_STATE, "a session is offered before the handshake");
         return MRB_TLS_FAILED;
     }
+    if (!library_is_held(session))
+        return MRB_TLS_FAILED;
     const auto *bytes = static_cast<const unsigned char *>(der);
     SSL_SESSION *earlier = d2i_SSL_SESSION(nullptr, &bytes, static_cast<long>(len));
     if (earlier == nullptr) {

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -93,6 +94,19 @@ struct named_certificate {
 };
 
 struct mrb_tls_config {
+    /* The header promises that a config may be freed while its sessions
+     * live on. An SSL_CTX reference alone does not keep that promise:
+     * the context stores raw pointers back INTO this object - itself as
+     * the server-name argument, and &alpn as the ALPN argument - and
+     * both are read from inside a handshake, driven by bytes the peer
+     * chose. So a session holds a reference to the config, and
+     * mrb_tls_config_free drops one rather than deleting.
+     *
+     * One counter and no lock: a config is shared between threads only
+     * by being handed to sessions on them, and that is a counter
+     * operation. */
+    std::atomic<unsigned> references{1};
+
     ctx_ptr ctx;
     std::vector<named_certificate> named;
     /* The wire form of the ALPN list: one length byte per name. */
@@ -100,6 +114,18 @@ struct mrb_tls_config {
     bool verify_chain = true;
     bool verify_name = true;
     bool verify_time = true;
+    /* Whether the caller stated the axes, or these are the defaults.
+     * A client verifies by default; a server asks a client for a
+     * certificate only where the caller said so, because a server that
+     * demands one by default refuses every ordinary browser. */
+    bool verify_stated = false;
+    /* The session ticket key, derived once from what the caller gave.
+     * A name the peer echoes, a key that encrypts the ticket and a key
+     * that authenticates it. Empty where the caller set none, and then
+     * the library keeps its own per-process key. */
+    std::vector<unsigned char> ticket_name;
+    std::vector<unsigned char> ticket_cipher_key;
+    std::vector<unsigned char> ticket_mac_key;
     mrb_tls_config *(*name_hook)(void *ctx, const char *host, bool *abort) = nullptr;
     void *name_hook_ctx = nullptr;
     mrb_tls_error last;
@@ -166,26 +192,32 @@ struct record_walk {
  * again may point an asynchronous call at them and they are still
  * there when it finishes. */
 struct handover_step {
+    /* What this step IS, and not where it sits. The first handover
+     * walks three steps and a rekey walks two, so an index means a
+     * different thing in each - and every answer the kernel gives has
+     * to be read against what was asked, never against a position. */
+    enum class kind { attach_module, send_key, receive_key } what;
     int level;
     int name;
     std::vector<std::byte> bytes;
 };
 
 struct mrb_tls_session {
+    /* Declared first so it is destroyed LAST: the BIO is freed from
+     * SSL_free, and a BIO that ran a callback in between would read the
+     * members below. tls_bio_forget_session clears the back pointer
+     * before that can matter, and this order is the second guard. */
     ssl_ptr ssl;
-    /* The config keeps its SSL_CTX alive through a reference of its
-     * own, so a caller may free the config first. */
-    ctx_ptr ctx;
+    /* The config this session came from, one reference held. It keeps
+     * both the SSL_CTX and the callback arguments inside the config
+     * alive for as long as this session can handshake. */
+    mrb_tls_config *config = nullptr;
     mrb_tls_io io{};
     mrb_tls_role role = MRB_TLS_CLIENT;
     enum phase phase = phase::handshake;
     mrb_tls_mode mode = MRB_TLS_MODE_UNDECIDED;
     /* Why the records stayed in userspace. Kind NONE in kernel mode. */
     mrb_tls_error fallback;
-    /* What a write callback was handed and has not yet taken. The
-     * contract says the same bytes come back, so they are held. */
-    std::vector<std::byte> out;
-    std::size_t out_sent = 0;
     std::string server_name;
     std::string cipher_name;
     std::string version_name;
@@ -201,6 +233,14 @@ struct mrb_tls_session {
      * steps and may stop between two of them. */
     std::vector<handover_step> plan;
     std::size_t step = 0;
+
+    /* The secrets a rekey derived, held until the kernel has taken
+     * them. Committing them before the socket options went through
+     * would ratchet this side one generation past the peer with no way
+     * back: a retry would ratchet again, and every record after that is
+     * undecryptable. */
+    std::array<std::vector<std::byte>, 2> pending_secret;
+    bool secret_pending = false;
 
     /* What the keylog handed over: the client's application traffic
      * secret at 0 and the server's at 1, whichever end this is. */
@@ -257,6 +297,7 @@ BIO *tls_bio_new(mrb_tls_session *session);
 enum class bio_want { none, read, write, closed, failed };
 bio_want tls_bio_want(const BIO *bio);
 void tls_bio_clear_want(BIO *bio);
+void tls_bio_forget_session(BIO *bio);
 
 /* The library's own words for what just failed, drained whole. */
 std::string tls_library_error(std::string_view what);

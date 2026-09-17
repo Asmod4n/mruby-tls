@@ -324,6 +324,22 @@ mrb_tls_mode mrb_tls_session_mode(const mrb_tls_session *session);
  * the sentence a caller prints when it wants to know why. */
 const mrb_tls_error *mrb_tls_session_fallback_reason(const mrb_tls_session *session);
 
+/* Read plaintext, and write plaintext. Both answer how much they moved
+ * through the size_t the caller points at, and both may move less than
+ * was asked for.
+ *
+ * What a caller owes after MRB_TLS_AGAIN_READ or MRB_TLS_AGAIN_WRITE:
+ * wait for the transport, then call again with the SAME bytes it was
+ * given before, from the same offset. A write that answers AGAIN_WRITE
+ * with *put at 0 took nothing; one that answers OK with *put below len
+ * took that much, and the rest is the caller's to offer again. Handing
+ * a retry other bytes, or fewer, breaks the record the library is in
+ * the middle of writing.
+ *
+ * A write may answer MRB_TLS_AGAIN_READ, and a read may answer
+ * MRB_TLS_AGAIN_WRITE: the library is in the middle of a key update,
+ * and it is the transport that decides, never the direction of the
+ * call. */
 mrb_tls_status mrb_tls_session_read(mrb_tls_session *session, void *buf, size_t cap, size_t *got);
 mrb_tls_status mrb_tls_session_write(mrb_tls_session *session, const void *buf, size_t len,
                                      size_t *put);
