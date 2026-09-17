@@ -17,6 +17,17 @@ MRuby::Gem::Specification.new('mruby-tls') do |spec|
   # mruby-secure-wipe-memory is gone with mbedTLS - OpenSSL owns its key
   # material and wipes it in SSL_CTX_free, so there is nothing here left to
   # scrub by hand.
+  # Every source under src/ is C++20: the core uses std::span for a run
+  # of bytes and std::variant for what a cipher hands the kernel, and a
+  # build without the standard named fails on the first of them. mruby
+  # sets no -std of its own, and the last one on the line wins.
+  spec.cxx.flags << '-std=c++20'
+
+  # A consumer that drives the C API - webmachine does - includes
+  # <mruby/tls.h> from its own sources, so the path goes out with the
+  # gem rather than being guessed by whoever links it.
+  spec.export_include_paths << File.join(File.dirname(__FILE__), "include")
+
   spec.add_test_dependency 'mruby-io', :core => 'mruby-io'
   spec.add_test_dependency 'mruby-socket', :core => 'mruby-socket'
 
