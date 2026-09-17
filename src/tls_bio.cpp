@@ -85,6 +85,13 @@ int bio_read(BIO *bio, char *buf, int len)
         state->session->last.number = err;
         state->session->last.text = "the transport could not be read";
     }
+    if (status == MRB_TLS_IO_DONE && got > 0) {
+        state->session->rx_walk.feed(
+            {reinterpret_cast<const unsigned char *>(buf), got});
+        /* Every record written before this read was written under an
+         * earlier key. What the kernel counts from is what follows. */
+        state->session->tx_at_last_read = state->session->tx_walk.records;
+    }
     return settle(bio, status, got, bio_want::read);
 }
 
@@ -103,6 +110,8 @@ int bio_write(BIO *bio, const char *buf, int len)
         state->session->last.number = err;
         state->session->last.text = "the transport could not be written";
     }
+    if (status == MRB_TLS_IO_DONE && put > 0)
+        state->session->tx_walk.feed({reinterpret_cast<const unsigned char *>(buf), put});
     return settle(bio, status, put, bio_want::write);
 }
 

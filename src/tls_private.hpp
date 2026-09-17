@@ -15,6 +15,7 @@
 
 #include <mruby/tls.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -107,6 +108,59 @@ struct mrb_tls_config {
 /* How far a session has come. The mode is decided once, at ready. */
 enum class phase { handshake, verified, ready, closed };
 
+/* Records that crossed, counted as they cross.
+ *
+ * The kernel counts records, not bytes: a handover hands it the
+ * sequence number to continue from, and a number that is wrong by one
+ * makes every later record undecryptable to the peer. Nothing else in
+ * this gem knows that number, so it is taken where the bytes are - at
+ * the BIO, in both directions.
+ *
+ * A record is five bytes of header and the length those five declare.
+ * The stream arrives in pieces that do not respect that, so the walker
+ * carries what it has of a header and how much of a body it still
+ * owes. */
+struct record_walk {
+    std::uint64_t records = 0;
+    /* How many of the five header bytes are still wanted. Five means a
+     * record is about to start. */
+    std::size_t header_left = 5;
+    std::array<unsigned char, 5> header{};
+    /* How many body bytes this record still owes. */
+    std::size_t body_left = 0;
+
+    void feed(std::span<const unsigned char> bytes)
+    {
+        while (!bytes.empty()) {
+            if (body_left == 0 && header_left > 0) {
+                const std::size_t take = std::min(header_left, bytes.size());
+                std::copy_n(bytes.begin(), take,
+                            std::next(header.begin(),
+                                      static_cast<std::ptrdiff_t>(header.size() - header_left)));
+                header_left -= take;
+                bytes = bytes.subspan(take);
+                if (header_left == 0) {
+                    /* RFC 8446 5.1: the length is the last two bytes of
+                     * the header, big endian. */
+                    body_left = (static_cast<std::size_t>(header[3]) << 8) | header[4];
+                    if (body_left == 0) {
+                        records++;
+                        header_left = header.size();
+                    }
+                }
+                continue;
+            }
+            const std::size_t take = std::min(body_left, bytes.size());
+            body_left -= take;
+            bytes = bytes.subspan(take);
+            if (body_left == 0) {
+                records++;
+                header_left = header.size();
+            }
+        }
+    }
+};
+
 /* One socket option the kernel takes, computed whole before any of it
  * is applied. The bytes live on the session, so a hook that answers
  * again may point an asynchronous call at them and they are still
@@ -155,9 +209,41 @@ struct mrb_tls_session {
     const EVP_MD *digest = nullptr;
 
     /* Where each direction's record count stands when the kernel takes
-     * over. The kernel counts on from these. */
-    std::uint64_t tx_records = 0;
-    std::uint64_t rx_records = 0;
+     * over. The kernel counts on from these.
+     *
+     * TLS 1.3 changes keys during the handshake and the kernel is given
+     * the application traffic key, so what it must count from is the
+     * number of records written under THAT key and no other. Which
+     * records those are depends on the role, because the two ends stop
+     * writing handshake records at different moments.
+     *
+     * A server writes its Finished under the handshake key, reads the
+     * client's Finished, and only then writes the tickets. So every
+     * record it writes after the last record it read is an application
+     * key record, and the tickets are exactly what the kernel must
+     * count past.
+     *
+     * A client writes its Finished under the handshake key AFTER it has
+     * read the server's last flight. Counting from its last read would
+     * therefore count that Finished, which is wrong by one. Its
+     * application key records are the ones it writes after the
+     * handshake is done, and at the handover there are none.
+     *
+     * Inbound is the same for both: nothing arrives under the
+     * application key before the handshake is done, so the count is
+     * whatever the transport had read ahead of it. */
+    record_walk tx_walk;
+    record_walk rx_walk;
+    std::uint64_t tx_at_last_read = 0;
+    std::uint64_t tx_at_done = 0;
+    std::uint64_t rx_at_done = 0;
+
+    std::uint64_t tx_records() const
+    {
+        const std::uint64_t from = role == MRB_TLS_SERVER ? tx_at_last_read : tx_at_done;
+        return tx_walk.records - from;
+    }
+    std::uint64_t rx_records() const { return rx_walk.records - rx_at_done; }
 
     mrb_tls_error last;
 };
@@ -177,6 +263,11 @@ std::string tls_library_error(std::string_view what);
 
 /* For the Ruby binding's introspection methods, and for nothing else. */
 SSL *tls_session_ssl(mrb_tls_session *session);
+
+/* What the kernel would be told to count from, in each direction. The
+ * handover is the only caller that matters; an example and a test read
+ * it to check the number on a box where no kernel will take it. */
+std::uint64_t tls_session_record_count(const mrb_tls_session *session, bool sending);
 
 #endif /* _WIN32 */
 

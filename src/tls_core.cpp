@@ -707,9 +707,9 @@ bool plan_handover(mrb_tls_session *session)
     std::vector<std::byte> tx;
     std::vector<std::byte> rx;
     if (!write_handover_payload(*row, session->secret[send_at], session->digest,
-                                session->tx_records, tx) ||
+                                session->tx_records(), tx) ||
         !write_handover_payload(*row, session->secret[receive_at], session->digest,
-                                session->rx_records, rx)) {
+                                session->rx_records(), rx)) {
         stay_in_userspace(session, "the traffic keys could not be derived");
         return false;
     }
@@ -901,6 +901,13 @@ mrb_tls_status mrb_tls_session_handshake(mrb_tls_session *session)
 
         if (session->role == MRB_TLS_CLIENT && !verify_peer(session))
             return MRB_TLS_FAILED;
+        /* Nothing arrives under the application key before this point,
+         * and a client writes nothing under it either, so both counts
+         * start here. A server's outbound count does not: its tickets
+         * go out inside this very call, and they are application key
+         * records the kernel has to count past. */
+        session->rx_at_done = session->rx_walk.records;
+        session->tx_at_done = session->tx_walk.records;
         session->phase = phase::verified;
     }
 
@@ -1117,8 +1124,11 @@ mrb_tls_status mrb_tls_session_rekey(mrb_tls_session *session)
         }
         session->secret[which] = std::move(next);
     }
-    session->tx_records = 0;
-    session->rx_records = 0;
+    /* A new key starts its own count, so every walker is read as being
+     * at zero from here, whichever rule the role uses. */
+    session->tx_at_last_read = session->tx_walk.records;
+    session->tx_at_done = session->tx_walk.records;
+    session->rx_at_done = session->rx_walk.records;
     std::vector<std::byte> tx;
     std::vector<std::byte> rx;
     if (!write_handover_payload(*session->row, session->secret[send_at], session->digest, 0, tx) ||
@@ -1339,4 +1349,21 @@ SSL *tls_session_ssl(mrb_tls_session *session)
     return session == nullptr ? nullptr : session->ssl.get();
 }
 
+std::uint64_t tls_session_record_count(const mrb_tls_session *session, bool sending)
+{
+    if (session == nullptr)
+        return 0;
+    return sending ? session->tx_records() : session->rx_records();
+}
+
 #endif /* _WIN32 */
+
+#ifndef _WIN32
+/* The example's window onto the record count, with C linkage so a C
+ * program can declare it. Not in the public header: a caller does not
+ * need this number, and a test does. */
+extern "C" unsigned long long tls_session_record_count_of(mrb_tls_session *session, int sending)
+{
+    return tls_session_record_count(session, sending != 0);
+}
+#endif

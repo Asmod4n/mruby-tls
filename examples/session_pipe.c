@@ -16,6 +16,11 @@
 
 #include <mruby/tls.h>
 
+/* The private accessor, declared here rather than included: this is an
+   example of the public API, and the one number it wants to show is not
+   part of it. */
+unsigned long long tls_session_record_count_of(mrb_tls_session *session, int sending);
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -166,6 +171,19 @@ int main(int argc, char **argv)
     printf("records: userspace (%s)\n",
            mrb_tls_error_text(mrb_tls_session_fallback_reason(server)));
   }
+
+  /* What the kernel would be told to count from. A server that issued
+     tickets has written records under the application key before any
+     handover, and a number that is wrong by one makes every later
+     record undecryptable to the peer. It is read here through the
+     private accessor, because on this box no kernel will take it and
+     the number would otherwise never be looked at. */
+  printf("records at handover: server sends from %llu, receives from %llu\n",
+         (unsigned long long)tls_session_record_count_of(server, 1),
+         (unsigned long long)tls_session_record_count_of(server, 0));
+  printf("records at handover: client sends from %llu, receives from %llu\n",
+         (unsigned long long)tls_session_record_count_of(client, 1),
+         (unsigned long long)tls_session_record_count_of(client, 0));
 
   /* One message each way. */
   static const char hello[] = "GET / HTTP/1.1\r\n\r\n";
