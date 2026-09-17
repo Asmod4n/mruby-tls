@@ -60,6 +60,37 @@
 #include <mruby/variable.h>
 #include <mruby/tls.h>
 
+/* The memory API of the versions before this one, declared here because
+ * include/mruby/tls.h no longer carries it: that header is now the C API
+ * of the session, and it names no mrb_value at all.
+ *
+ * This block and every definition under it go when src/tls_core.cpp and
+ * the binding over it replace this file. Nothing new may call them. */
+MRB_API mrb_value mrb_tls_accept_memory(mrb_state *mrb, mrb_value server);
+MRB_API int mrb_tls_feed(mrb_state *mrb, mrb_value conn, const void *buf, size_t len);
+MRB_API size_t mrb_tls_pending(mrb_state *mrb, mrb_value conn, const unsigned char **buf);
+MRB_API void mrb_tls_drain(mrb_state *mrb, mrb_value conn, size_t len);
+MRB_API int mrb_tls_handshake_memory(mrb_state *mrb, mrb_value conn);
+MRB_API int mrb_tls_read_memory(mrb_state *mrb, mrb_value conn, void *buf, size_t len);
+MRB_API int mrb_tls_write_memory(mrb_state *mrb, mrb_value conn, const void *buf, size_t len);
+MRB_API int mrb_tls_shutdown_memory(mrb_state *mrb, mrb_value conn);
+
+#define MRB_TLS_KTLS_AES_GCM_128 1
+#define MRB_TLS_KTLS_AES_GCM_256 2
+#define MRB_TLS_KTLS_CHACHA20_POLY1305 3
+
+typedef struct mrb_tls_ktls_tx {
+  int cipher;
+  int version;
+  unsigned char key[32];
+  size_t key_len;
+  unsigned char iv[12];
+  size_t iv_len;
+  unsigned char rec_seq[8];
+} mrb_tls_ktls_tx_t;
+
+MRB_API int mrb_tls_ktls_tx_params(mrb_state *mrb, mrb_value conn, mrb_tls_ktls_tx_t *out);
+
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
