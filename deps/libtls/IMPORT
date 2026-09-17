@@ -13,3 +13,12 @@ on top of a merge from here. To take a newer libtls: check this branch
 out, replace these files from the new release, commit, and merge the
 branch into the working branch. What conflicts is then the port against
 what upstream changed, which is the question worth reading.
+
+Two functions of OpenBSD's C library come with it, from the same
+release, also unchanged:
+
+    compat/freezero.c            crypto/compat/freezero.c
+    compat/timingsafe_memcmp.c   crypto/compat/timingsafe_memcmp.c
+
+libtls calls both. timingsafe_memcmp compares a MAC, so it is taken
+rather than written again.
